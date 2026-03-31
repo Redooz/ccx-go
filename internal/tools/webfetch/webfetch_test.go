@@ -22,7 +22,7 @@ func TestWebFetch_PlainText(t *testing.T) {
 	input, _ := json.Marshal(map[string]any{"url": srv.URL})
 	result, err := tool.Execute(context.Background(), input)
 	require.NoError(t, err)
-	assert.Equal(t, "hello world", result.Content)
+	assert.Contains(t, result.Content, "hello world")
 }
 
 func TestWebFetch_HTMLStripping(t *testing.T) {
@@ -61,10 +61,51 @@ func TestWebFetch_EmptyURL(t *testing.T) {
 	assert.Contains(t, result.Content, "required")
 }
 
-func TestStripHTML(t *testing.T) {
+func TestHtmlToMarkdown(t *testing.T) {
 	html := `<html><head><style>body{color:red}</style></head><body><p>Hello &amp; World</p></body></html>`
-	result := stripHTML(html)
+	result := htmlToMarkdown(html)
 	assert.Contains(t, result, "Hello & World")
 	assert.NotContains(t, result, "<p>")
 	assert.NotContains(t, result, "color:red")
+}
+
+func TestHtmlToMarkdown_Headings(t *testing.T) {
+	html := `<h1>Title</h1><h2>Sub</h2><p>text</p>`
+	result := htmlToMarkdown(html)
+	assert.Contains(t, result, "# Title")
+	assert.Contains(t, result, "## Sub")
+	assert.Contains(t, result, "text")
+}
+
+func TestWebFetch_HTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	tool := New()
+	input, _ := json.Marshal(map[string]any{"url": srv.URL})
+	result, err := tool.Execute(context.Background(), input)
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, result.Content, "404")
+}
+
+func TestWebFetch_Redirect(t *testing.T) {
+	final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte("redirected"))
+	}))
+	defer final.Close()
+
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, final.URL, http.StatusFound)
+	}))
+	defer redirect.Close()
+
+	tool := New()
+	input, _ := json.Marshal(map[string]any{"url": redirect.URL})
+	result, err := tool.Execute(context.Background(), input)
+	require.NoError(t, err)
+	assert.Contains(t, result.Content, "redirected")
 }

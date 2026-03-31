@@ -10,16 +10,13 @@ import (
 type RunFunc func(ctx context.Context, def Def) (string, error)
 
 // SpawnAgent starts an agent in a goroutine and returns a channel for the result.
+// The agent is registered in the registry and can receive messages via its Inbox.
 func SpawnAgent(ctx context.Context, def Def, registry *Registry, run RunFunc) <-chan Result {
 	ch := make(chan Result, 1)
 
 	ctx, cancel := context.WithCancel(ctx)
 
-	entry := &Entry{
-		Def:    def,
-		Status: StatusRunning,
-		Cancel: cancel,
-	}
+	entry := NewEntry(def, cancel)
 
 	if def.Name != "" {
 		registry.Register(def.Name, entry)
@@ -52,8 +49,37 @@ func SpawnAgent(ctx context.Context, def Def, registry *Registry, run RunFunc) <
 	return ch
 }
 
+// SpawnMultiple launches multiple agents concurrently and collects all results.
+func SpawnMultiple(ctx context.Context, defs []Def, registry *Registry, run RunFunc) []<-chan Result {
+	channels := make([]<-chan Result, len(defs))
+	for i, def := range defs {
+		channels[i] = SpawnAgent(ctx, def, registry, run)
+	}
+	return channels
+}
+
+// CollectResults waits for results from multiple agent channels.
+func CollectResults(ctx context.Context, channels []<-chan Result) []Result {
+	results := make([]Result, 0, len(channels))
+	for _, ch := range channels {
+		select {
+		case <-ctx.Done():
+			results = append(results, Result{
+				Output:  "cancelled",
+				IsError: true,
+				Err:     ctx.Err(),
+			})
+		case result, ok := <-ch:
+			if ok {
+				results = append(results, result)
+			}
+		}
+	}
+	return results
+}
+
 // SendMessage sends a message to a named agent via the registry.
-// Returns an error if the agent is not found or not running.
+// The message is delivered to the agent's Inbox channel.
 func SendMessage(registry *Registry, name string, message string) error {
 	entry := registry.Get(name)
 	if entry == nil {
@@ -62,7 +88,26 @@ func SendMessage(registry *Registry, name string, message string) error {
 	if entry.Status != StatusRunning {
 		return fmt.Errorf("agent %q is %s, not running", name, entry.Status)
 	}
-	// In a real implementation, this would send via a channel on the entry.
-	// For now, this is a placeholder for the message-passing protocol.
+
+	select {
+	case entry.Inbox <- message:
+		return nil
+	default:
+		return fmt.Errorf("agent %q inbox is full", name)
+	}
+}
+
+// CancelAgent cancels a running agent by name.
+func CancelAgent(registry *Registry, name string) error {
+	entry := registry.Get(name)
+	if entry == nil {
+		return fmt.Errorf("agent %q not found", name)
+	}
+	if entry.Status != StatusRunning {
+		return fmt.Errorf("agent %q is %s, not running", name, entry.Status)
+	}
+
+	entry.Cancel()
+	entry.Status = StatusCancelled
 	return nil
 }

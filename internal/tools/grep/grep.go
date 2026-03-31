@@ -15,11 +15,18 @@ type input struct {
 	Pattern    string `json:"pattern"`
 	Path       string `json:"path,omitempty"`
 	Glob       string `json:"glob,omitempty"`
+	Type       string `json:"type,omitempty"`
 	OutputMode string `json:"output_mode,omitempty"`
 	Context    int    `json:"context,omitempty"`
+	Before     int    `json:"-A,omitempty"`
+	After      int    `json:"-B,omitempty"`
+	Insensitive bool  `json:"-i,omitempty"`
+	Multiline  bool   `json:"multiline,omitempty"`
+	HeadLimit  int    `json:"head_limit,omitempty"`
+	LineNumbers bool  `json:"-n,omitempty"`
 }
 
-// Tool implements search via ripgrep.
+// Tool implements search via ripgrep with grep fallback.
 type Tool struct{}
 
 func New() *Tool { return &Tool{} }
@@ -34,8 +41,15 @@ func (t *Tool) InputSchema() json.RawMessage {
 			"pattern": {"type": "string", "description": "Regex pattern to search for"},
 			"path": {"type": "string", "description": "Directory or file to search"},
 			"glob": {"type": "string", "description": "Glob filter (e.g. *.go)"},
-			"output_mode": {"type": "string", "enum": ["content", "files_with_matches", "count"], "description": "Output mode"},
-			"context": {"type": "integer", "description": "Lines of context around matches"}
+			"type": {"type": "string", "description": "File type filter (e.g. go, py, js)"},
+			"output_mode": {"type": "string", "enum": ["content", "files_with_matches", "count"], "description": "Output mode (default: files_with_matches)"},
+			"context": {"type": "integer", "description": "Lines of context around matches (-C)"},
+			"-A": {"type": "integer", "description": "Lines after each match"},
+			"-B": {"type": "integer", "description": "Lines before each match"},
+			"-i": {"type": "boolean", "description": "Case-insensitive search"},
+			"-n": {"type": "boolean", "description": "Show line numbers (default true for content mode)"},
+			"multiline": {"type": "boolean", "description": "Enable multiline matching"},
+			"head_limit": {"type": "integer", "description": "Limit output to first N lines (default 250)"}
 		},
 		"required": ["pattern"]
 	}`)
@@ -49,6 +63,11 @@ func (t *Tool) Execute(ctx context.Context, rawInput json.RawMessage) (*tool.Res
 
 	if in.Pattern == "" {
 		return &tool.Result{Content: "pattern is required", IsError: true}, nil
+	}
+
+	// Default head_limit
+	if in.HeadLimit == 0 {
+		in.HeadLimit = 250
 	}
 
 	args := buildArgs(in)
@@ -80,7 +99,15 @@ func (t *Tool) Execute(ctx context.Context, rawInput json.RawMessage) (*tool.Res
 	if output == "" {
 		return &tool.Result{Content: "no matches found"}, nil
 	}
-	return &tool.Result{Content: strings.TrimRight(output, "\n")}, nil
+
+	output = strings.TrimRight(output, "\n")
+
+	// Apply head_limit
+	if in.HeadLimit > 0 {
+		output = limitLines(output, in.HeadLimit)
+	}
+
+	return &tool.Result{Content: output}, nil
 }
 
 func buildArgs(in input) []string {
@@ -92,15 +119,39 @@ func buildArgs(in input) []string {
 	case "count":
 		args = append(args, "-c")
 	default:
-		args = append(args, "-n") // content mode with line numbers
+		// content mode with line numbers by default
+		args = append(args, "-n")
+	}
+
+	if in.Insensitive {
+		args = append(args, "-i")
+	}
+
+	if in.Multiline {
+		args = append(args, "-U", "--multiline-dotall")
 	}
 
 	if in.Context > 0 {
 		args = append(args, "-C", fmt.Sprintf("%d", in.Context))
 	}
+	if in.Before > 0 {
+		args = append(args, "-B", fmt.Sprintf("%d", in.Before))
+	}
+	if in.After > 0 {
+		args = append(args, "-A", fmt.Sprintf("%d", in.After))
+	}
 
 	if in.Glob != "" {
 		args = append(args, "--glob", in.Glob)
+	}
+
+	if in.Type != "" {
+		args = append(args, "--type", in.Type)
+	}
+
+	// Limit max count for files_with_matches and count modes
+	if in.HeadLimit > 0 && (in.OutputMode == "files_with_matches" || in.OutputMode == "" || in.OutputMode == "count") {
+		args = append(args, "--max-count", "1")
 	}
 
 	args = append(args, in.Pattern)
@@ -115,7 +166,11 @@ func buildArgs(in input) []string {
 }
 
 func (t *Tool) fallbackGrep(ctx context.Context, in input) (*tool.Result, error) {
-	args := []string{"-rn", in.Pattern}
+	args := []string{"-rn"}
+	if in.Insensitive {
+		args = append(args, "-i")
+	}
+	args = append(args, in.Pattern)
 	if in.Path != "" {
 		args = append(args, in.Path)
 	} else {
@@ -138,7 +193,22 @@ func (t *Tool) fallbackGrep(ctx context.Context, in input) (*tool.Result, error)
 	if output == "" {
 		return &tool.Result{Content: "no matches found"}, nil
 	}
-	return &tool.Result{Content: strings.TrimRight(output, "\n")}, nil
+
+	output = strings.TrimRight(output, "\n")
+	if in.HeadLimit > 0 {
+		output = limitLines(output, in.HeadLimit)
+	}
+
+	return &tool.Result{Content: output}, nil
+}
+
+// limitLines returns at most n lines from the string.
+func limitLines(s string, n int) string {
+	lines := strings.Split(s, "\n")
+	if len(lines) <= n {
+		return s
+	}
+	return strings.Join(lines[:n], "\n") + fmt.Sprintf("\n... (%d more lines)", len(lines)-n)
 }
 
 func isNotFound(err error) bool {

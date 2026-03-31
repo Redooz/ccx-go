@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -87,6 +89,66 @@ func TestClient_CreateMessage_APIError(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid api key")
 }
 
+func TestClient_RateLimitRetry(t *testing.T) {
+	var attempts atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := attempts.Add(1)
+		if n <= 2 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]any{"type": "rate_limit_error", "message": "too many requests"},
+			})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(Response{
+			ID:         "msg_retry",
+			Content:    []ContentBlock{{Type: "text", Text: "success after retry"}},
+			StopReason: "end_turn",
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient("key").WithBaseURL(server.URL)
+	got, err := client.CreateMessage(context.Background(), &Request{
+		Model:    "claude-sonnet-4-20250514",
+		Messages: []Message{{Role: RoleUser, Content: []ContentBlock{NewTextBlock("Hi")}}},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "success after retry", got.Content[0].Text)
+	assert.GreaterOrEqual(t, int(attempts.Load()), 3)
+}
+
+func TestClient_ServerErrorRetry(t *testing.T) {
+	var attempts atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := attempts.Add(1)
+		if n == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(Response{
+			ID:         "msg_ok",
+			Content:    []ContentBlock{{Type: "text", Text: "ok"}},
+			StopReason: "end_turn",
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient("key").WithBaseURL(server.URL)
+	got, err := client.CreateMessage(context.Background(), &Request{
+		Model:    "claude-sonnet-4-20250514",
+		Messages: []Message{{Role: RoleUser, Content: []ContentBlock{NewTextBlock("Hi")}}},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "ok", got.Content[0].Text)
+}
+
 func TestClient_CreateMessageStream(t *testing.T) {
 	sseData := `event: message_start
 data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-20250514","usage":{"input_tokens":10,"output_tokens":0}}}
@@ -163,4 +225,56 @@ func TestClient_SetHeaders(t *testing.T) {
 		Model:    "claude-sonnet-4-20250514",
 		Messages: []Message{{Role: RoleUser, Content: []ContentBlock{NewTextBlock("test")}}},
 	})
+}
+
+func TestAPIError(t *testing.T) {
+	err := &APIError{StatusCode: 429, Type: "rate_limit_error", Message: "too many requests"}
+	assert.Contains(t, err.Error(), "429")
+	assert.Contains(t, err.Error(), "rate_limit_error")
+	assert.True(t, err.IsRateLimit())
+	assert.False(t, err.IsOverloaded())
+
+	err2 := &APIError{StatusCode: 529, Message: "overloaded"}
+	assert.True(t, err2.IsOverloaded())
+}
+
+func TestRetryDelay(t *testing.T) {
+	d1 := retryDelay(1, nil)
+	assert.Equal(t, 1*time.Second, d1)
+
+	d2 := retryDelay(2, nil)
+	assert.Equal(t, 2*time.Second, d2)
+
+	d3 := retryDelay(3, nil)
+	assert.Equal(t, 4*time.Second, d3)
+
+	// Should cap at 30s
+	d10 := retryDelay(10, nil)
+	assert.LessOrEqual(t, d10, 30*time.Second)
+}
+
+func TestIsRetryable(t *testing.T) {
+	assert.True(t, isRetryable(429))
+	assert.True(t, isRetryable(500))
+	assert.True(t, isRetryable(529))
+	assert.True(t, isRetryable(503))
+	assert.False(t, isRetryable(401))
+	assert.False(t, isRetryable(400))
+	assert.False(t, isRetryable(200))
+}
+
+func TestParseAPIError(t *testing.T) {
+	body := []byte(`{"error":{"type":"invalid_request","message":"bad input"}}`)
+	err := parseAPIError(400, body)
+	assert.Equal(t, 400, err.StatusCode)
+	assert.Equal(t, "invalid_request", err.Type)
+	assert.Equal(t, "bad input", err.Message)
+
+	// Non-JSON body
+	err2 := parseAPIError(500, []byte("plain error"))
+	assert.Equal(t, "plain error", err2.Message)
+
+	// Empty body
+	err3 := parseAPIError(500, []byte(""))
+	assert.Equal(t, "Internal Server Error", err3.Message)
 }

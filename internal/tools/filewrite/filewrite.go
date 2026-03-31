@@ -15,7 +15,7 @@ type input struct {
 	Content  string `json:"content"`
 }
 
-// Tool implements the FileWrite tool.
+// Tool implements the FileWrite tool with atomic writes.
 type Tool struct{}
 
 func New() *Tool { return &Tool{} }
@@ -49,8 +49,48 @@ func (t *Tool) Execute(ctx context.Context, rawInput json.RawMessage) (*tool.Res
 		return &tool.Result{Content: fmt.Sprintf("error creating directory: %v", err), IsError: true}, nil
 	}
 
-	if err := os.WriteFile(in.FilePath, []byte(in.Content), 0644); err != nil {
-		return &tool.Result{Content: fmt.Sprintf("error writing file: %v", err), IsError: true}, nil
+	// Preserve existing file permissions if the file exists
+	perm := os.FileMode(0644)
+	if info, err := os.Stat(in.FilePath); err == nil {
+		perm = info.Mode().Perm()
+	}
+
+	// Atomic write: write to temp file in same directory, then rename.
+	// This prevents partial writes from corrupting the file.
+	tmp, err := os.CreateTemp(dir, ".ccx-write-*")
+	if err != nil {
+		// Fall back to direct write if temp file creation fails
+		if err := os.WriteFile(in.FilePath, []byte(in.Content), perm); err != nil {
+			return &tool.Result{Content: fmt.Sprintf("error writing file: %v", err), IsError: true}, nil
+		}
+		return &tool.Result{Content: fmt.Sprintf("wrote %d bytes to %s", len(in.Content), in.FilePath)}, nil
+	}
+
+	tmpPath := tmp.Name()
+
+	// Write content to temp file
+	_, err = tmp.WriteString(in.Content)
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		os.Remove(tmpPath)
+		return &tool.Result{Content: fmt.Sprintf("error writing temp file: %v", err), IsError: true}, nil
+	}
+
+	// Set permissions on temp file before rename
+	if err := os.Chmod(tmpPath, perm); err != nil {
+		os.Remove(tmpPath)
+		return &tool.Result{Content: fmt.Sprintf("error setting permissions: %v", err), IsError: true}, nil
+	}
+
+	// Atomic rename
+	if err := os.Rename(tmpPath, in.FilePath); err != nil {
+		os.Remove(tmpPath)
+		// Fall back to direct write if rename fails (e.g., cross-device)
+		if err := os.WriteFile(in.FilePath, []byte(in.Content), perm); err != nil {
+			return &tool.Result{Content: fmt.Sprintf("error writing file: %v", err), IsError: true}, nil
+		}
 	}
 
 	return &tool.Result{Content: fmt.Sprintf("wrote %d bytes to %s", len(in.Content), in.FilePath)}, nil

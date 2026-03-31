@@ -56,12 +56,24 @@ type Entry struct {
 	Status Status
 	Result *Result
 	Cancel context.CancelFunc
+	// Inbox receives messages sent to this agent via SendMessage.
+	Inbox chan string
 }
 
-// Registry tracks named agents.
+// NewEntry creates a new agent entry with a message inbox.
+func NewEntry(def Def, cancel context.CancelFunc) *Entry {
+	return &Entry{
+		Def:    def,
+		Status: StatusRunning,
+		Cancel: cancel,
+		Inbox:  make(chan string, 16), // buffered to avoid blocking senders
+	}
+}
+
+// Registry tracks named agents with thread-safe access.
 type Registry struct {
-	mu      sync.RWMutex
-	agents  map[string]*Entry
+	mu     sync.RWMutex
+	agents map[string]*Entry
 }
 
 // NewRegistry creates a new agent registry.
@@ -85,7 +97,7 @@ func (r *Registry) Get(name string) *Entry {
 	return r.agents[name]
 }
 
-// All returns all registered agents.
+// All returns a snapshot of all registered agents.
 func (r *Registry) All() map[string]*Entry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -101,4 +113,48 @@ func (r *Registry) Remove(name string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.agents, name)
+}
+
+// Count returns the number of registered agents.
+func (r *Registry) Count() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.agents)
+}
+
+// Running returns all agents currently in StatusRunning.
+func (r *Registry) Running() []*Entry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var running []*Entry
+	for _, e := range r.agents {
+		if e.Status == StatusRunning {
+			running = append(running, e)
+		}
+	}
+	return running
+}
+
+// WaitAll blocks until all registered agents are done or the context is cancelled.
+func (r *Registry) WaitAll(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		running := r.Running()
+		if len(running) == 0 {
+			return
+		}
+
+		// Simple polling - in production you'd use a condition variable
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			// Check again on next iteration
+		}
+	}
 }

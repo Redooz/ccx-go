@@ -19,6 +19,14 @@ type LoopConfig struct {
 	MaxTokens int
 	MaxTurns  int
 	System    string
+	// OnText is called when text is received during streaming (for TUI integration).
+	OnText func(text string)
+	// OnToolStart is called when a tool execution begins.
+	OnToolStart func(toolName string)
+	// OnToolDone is called when a tool execution completes.
+	OnToolDone func(toolName string, result string, isError bool)
+	// OnTurnComplete is called after each assistant turn.
+	OnTurnComplete func(usage api.Usage)
 }
 
 // Loop implements the core agentic query loop.
@@ -26,6 +34,8 @@ type Loop struct {
 	client   *api.Client
 	registry *tool.Registry
 	config   LoopConfig
+	// Messages is accessible for introspection (e.g., context compaction).
+	Messages []api.Message
 }
 
 // NewLoop creates a new query loop.
@@ -40,10 +50,8 @@ func NewLoop(client *api.Client, registry *tool.Registry, config LoopConfig) *Lo
 	}
 }
 
-// Run starts the interactive query loop.
+// Run starts the interactive query loop. If initialPrompt is empty, reads from stdin.
 func (l *Loop) Run(ctx context.Context, initialPrompt string) error {
-	var messages []api.Message
-
 	prompt := initialPrompt
 	if prompt == "" {
 		var err error
@@ -53,11 +61,61 @@ func (l *Loop) Run(ctx context.Context, initialPrompt string) error {
 		}
 	}
 
-	messages = append(messages, api.Message{
+	l.Messages = append(l.Messages, api.Message{
 		Role:    api.RoleUser,
 		Content: []api.ContentBlock{api.NewTextBlock(prompt)},
 	})
 
+	// Run the agentic loop until the model stops calling tools
+	if err := l.runLoop(ctx); err != nil {
+		return err
+	}
+
+	// Interactive multi-turn: keep accepting user input
+	for {
+		fmt.Fprintln(os.Stdout)
+		input, err := readInput(os.Stdin, os.Stdout)
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if input == "" {
+			continue
+		}
+		if input == "/exit" || input == "/quit" {
+			return nil
+		}
+
+		l.Messages = append(l.Messages, api.Message{
+			Role:    api.RoleUser,
+			Content: []api.ContentBlock{api.NewTextBlock(input)},
+		})
+
+		if err := l.runLoop(ctx); err != nil {
+			return err
+		}
+	}
+}
+
+// RunSingle executes a single turn (useful for non-interactive / testing).
+func (l *Loop) RunSingle(ctx context.Context, messages []api.Message) (*api.Response, error) {
+	return l.sendRequest(ctx, messages)
+}
+
+// SendMessage sends a message and runs the agentic loop until the model stops.
+// Useful for programmatic interaction (e.g., agent spawning).
+func (l *Loop) SendMessage(ctx context.Context, text string) error {
+	l.Messages = append(l.Messages, api.Message{
+		Role:    api.RoleUser,
+		Content: []api.ContentBlock{api.NewTextBlock(text)},
+	})
+	return l.runLoop(ctx)
+}
+
+// runLoop executes turns until the model stops requesting tools.
+func (l *Loop) runLoop(ctx context.Context) error {
 	turns := 0
 	for {
 		if ctx.Err() != nil {
@@ -69,34 +127,45 @@ func (l *Loop) Run(ctx context.Context, initialPrompt string) error {
 		}
 		turns++
 
-		resp, err := l.sendRequest(ctx, messages)
+		resp, err := l.sendRequest(ctx, l.Messages)
 		if err != nil {
 			return fmt.Errorf("API request failed: %w", err)
 		}
 
-		messages = append(messages, api.Message{
+		l.Messages = append(l.Messages, api.Message{
 			Role:    api.RoleAssistant,
 			Content: resp.Content,
 		})
 
+		if l.config.OnTurnComplete != nil {
+			l.config.OnTurnComplete(resp.Usage)
+		}
+
 		toolUses := extractToolUses(resp.Content)
 		printTextBlocks(os.Stdout, resp.Content)
 
-		if len(toolUses) == 0 || resp.StopReason == "end_turn" {
+		// Stop conditions:
+		// 1. No tool calls → conversation turn complete
+		// 2. stop_reason is "end_turn" AND no tool calls
+		// 3. stop_reason is "max_tokens" → warn and stop
+		if resp.StopReason == "max_tokens" {
+			fmt.Fprintln(os.Stderr, "\n[warning: response truncated due to max_tokens]")
+			if len(toolUses) == 0 {
+				return nil
+			}
+		}
+
+		if len(toolUses) == 0 {
 			return nil
 		}
 
+		// Execute all tool calls and gather results
 		results := l.executeTools(ctx, toolUses)
-		messages = append(messages, api.Message{
+		l.Messages = append(l.Messages, api.Message{
 			Role:    api.RoleUser,
 			Content: results,
 		})
 	}
-}
-
-// RunSingle executes a single turn (useful for testing).
-func (l *Loop) RunSingle(ctx context.Context, messages []api.Message) (*api.Response, error) {
-	return l.sendRequest(ctx, messages)
 }
 
 func (l *Loop) sendRequest(ctx context.Context, messages []api.Message) (*api.Response, error) {
@@ -126,7 +195,11 @@ func (l *Loop) sendRequest(ctx context.Context, messages []api.Message) (*api.Re
 
 		// Print text deltas as they arrive
 		if event.Type == "content_block_delta" && event.Delta != nil && event.Delta.Type == "text_delta" {
-			fmt.Fprint(os.Stdout, event.Delta.Text)
+			text := event.Delta.Text
+			fmt.Fprint(os.Stdout, text)
+			if l.config.OnText != nil {
+				l.config.OnText(text)
+			}
 		}
 
 		if acc.Process(event) {
@@ -145,25 +218,36 @@ func (l *Loop) executeTools(ctx context.Context, toolUses []api.ContentBlock) []
 	var results []api.ContentBlock
 
 	for _, tu := range toolUses {
+		if l.config.OnToolStart != nil {
+			l.config.OnToolStart(tu.Name)
+		}
+
 		t := l.registry.FindByName(tu.Name)
 		if t == nil {
-			results = append(results, api.NewToolResultBlock(
-				tu.ID, fmt.Sprintf("tool %q not found", tu.Name), true,
-			))
+			errMsg := fmt.Sprintf("tool %q not found", tu.Name)
+			results = append(results, api.NewToolResultBlock(tu.ID, errMsg, true))
+			if l.config.OnToolDone != nil {
+				l.config.OnToolDone(tu.Name, errMsg, true)
+			}
 			continue
 		}
 
 		result, err := t.Execute(ctx, tu.Input)
 		if err != nil {
-			results = append(results, api.NewToolResultBlock(
-				tu.ID, fmt.Sprintf("error: %v", err), true,
-			))
+			errMsg := fmt.Sprintf("tool execution error: %v", err)
+			results = append(results, api.NewToolResultBlock(tu.ID, errMsg, true))
+			if l.config.OnToolDone != nil {
+				l.config.OnToolDone(tu.Name, errMsg, true)
+			}
 			continue
 		}
 
 		results = append(results, api.NewToolResultBlock(
 			tu.ID, result.Content, result.IsError,
 		))
+		if l.config.OnToolDone != nil {
+			l.config.OnToolDone(tu.Name, result.Content, result.IsError)
+		}
 	}
 
 	return results
