@@ -117,7 +117,7 @@ func (a *Accumulator) Process(event *StreamEvent) bool {
 			case "thinking_delta":
 				block.Thinking += event.Delta.Thinking
 			case "input_json_delta":
-				block.Input = appendJSON(block.Input, event.Delta.Text)
+				block.Input = appendJSON(block.Input, event.Delta.PartialJSON)
 			}
 		}
 
