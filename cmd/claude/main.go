@@ -4,23 +4,28 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"runtime"
 	"strings"
 	"syscall"
 
 	"github.com/anton-abyzov/ccx-go/internal/api"
 	"github.com/anton-abyzov/ccx-go/internal/config"
 	"github.com/anton-abyzov/ccx-go/internal/cost"
+	"github.com/anton-abyzov/ccx-go/internal/prompt"
 	"github.com/anton-abyzov/ccx-go/internal/query"
 	"github.com/anton-abyzov/ccx-go/internal/tool"
+	agentTool "github.com/anton-abyzov/ccx-go/internal/tools/agent"
 	"github.com/anton-abyzov/ccx-go/internal/tools/bash"
 	"github.com/anton-abyzov/ccx-go/internal/tools/fileedit"
 	"github.com/anton-abyzov/ccx-go/internal/tools/fileread"
 	"github.com/anton-abyzov/ccx-go/internal/tools/filewrite"
 	"github.com/anton-abyzov/ccx-go/internal/tools/glob"
 	"github.com/anton-abyzov/ccx-go/internal/tools/grep"
+	"github.com/anton-abyzov/ccx-go/internal/tools/notebookedit"
+	"github.com/anton-abyzov/ccx-go/internal/tools/todowrite"
 	"github.com/anton-abyzov/ccx-go/internal/tools/webfetch"
+	"github.com/anton-abyzov/ccx-go/internal/tools/websearch"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var version = "dev"
@@ -73,22 +78,59 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	cwd, _ := os.Getwd()
 	claudeMD := config.DiscoverClaudeMD(cwd)
 
-	// Build system prompt
-	systemPrompt := buildSystemPrompt(cwd, claudeMD, settings, extraSystem)
-
 	// Initialize cost tracker
 	tracker := cost.NewTracker()
 
 	// Set up client and tools
 	client := api.NewClient(apiKey)
-	registry := registerTools(cwd)
+	registry := registerTools(cwd, client, model)
+
+	// Build CLAUDE.md content for system prompt
+	var claudeMDContent string
+	if claudeMD != nil && len(claudeMD.Entries) > 0 {
+		var parts []string
+		for _, entry := range claudeMD.Entries {
+			parts = append(parts, fmt.Sprintf("## %s\n%s", entry.Path, entry.Content))
+		}
+		claudeMDContent = strings.Join(parts, "\n\n")
+	}
+
+	// Add settings system prompt and memory
+	var extraParts []string
+	if settings.SystemPrompt != "" {
+		extraParts = append(extraParts, settings.SystemPrompt)
+	}
+	if extraSystem != "" {
+		extraParts = append(extraParts, extraSystem)
+	}
+	memDir := config.MemoryDir()
+	if memIndex, err := config.LoadMemoryIndex(memDir); err == nil && memIndex != "" {
+		extraParts = append(extraParts, "# Memory\n"+memIndex)
+	}
+
+	// Build system prompt using the prompt package
+	systemPrompt := prompt.BuildSystemPrompt(
+		registry.All(),
+		claudeMDContent,
+		cwd,
+		strings.Join(extraParts, "\n\n"),
+	)
+
+	// Enable agent log output
+	agentTool.SetLogWriter(os.Stderr)
+
+	// Detect interactive TTY vs piped input
+	isTTY := term.IsTerminal(int(os.Stdin.Fd()))
+	toolCount := len(registry.All())
 
 	// Print welcome
-	fmt.Fprintf(os.Stderr, "ccx-go v%s | model: %s | cwd: %s\n", version, model, cwd)
-	if len(claudeMD.Entries) > 0 {
-		fmt.Fprintf(os.Stderr, "Loaded %d CLAUDE.md file(s)\n", len(claudeMD.Entries))
+	if isTTY {
+		fmt.Fprintf(os.Stderr, "ccx-go v%s | Model: %s | Tools: %d\n", version, model, toolCount)
+		if len(claudeMD.Entries) > 0 {
+			fmt.Fprintf(os.Stderr, "Loaded %d CLAUDE.md file(s)\n", len(claudeMD.Entries))
+		}
+		fmt.Fprintf(os.Stderr, "Type /exit to quit, Ctrl+C to interrupt\n\n")
 	}
-	fmt.Fprintf(os.Stderr, "Type /exit to quit, Ctrl+C to interrupt\n\n")
 
 	loop := query.NewLoop(client, registry, query.LoopConfig{
 		Model:     model,
@@ -119,8 +161,11 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	return err
 }
 
-func registerTools(cwd string) *tool.Registry {
+func registerTools(cwd string, client *api.Client, model string) *tool.Registry {
 	registry := tool.NewRegistry()
+
+	// Build a temporary system prompt for the agent tool (it will use the same prompt)
+	agentSystem := "You are a sub-agent. Complete the given task using available tools, then return a concise summary."
 
 	tools := []tool.Tool{
 		bash.New(cwd),
@@ -130,6 +175,10 @@ func registerTools(cwd string) *tool.Registry {
 		glob.New(),
 		grep.New(),
 		webfetch.New(),
+		websearch.New(),
+		todowrite.New(),
+		notebookedit.New(),
+		agentTool.New(client, registry, model, agentSystem),
 	}
 
 	for _, t := range tools {
@@ -139,41 +188,4 @@ func registerTools(cwd string) *tool.Registry {
 	}
 
 	return registry
-}
-
-func buildSystemPrompt(cwd string, claudeMD *config.ClaudeMD, settings *config.Settings, extra string) string {
-	var parts []string
-
-	parts = append(parts, fmt.Sprintf(`You are an AI coding assistant. You help users with software engineering tasks.
-
-# Environment
-- Working directory: %s
-- Platform: %s/%s
-- Go version: %s`, cwd, runtime.GOOS, runtime.GOARCH, runtime.Version()))
-
-	// Add CLAUDE.md content
-	if claudeMD != nil && len(claudeMD.Entries) > 0 {
-		parts = append(parts, "\n# Project Instructions (from CLAUDE.md)")
-		for _, entry := range claudeMD.Entries {
-			parts = append(parts, fmt.Sprintf("\n## %s\n%s", entry.Path, entry.Content))
-		}
-	}
-
-	// Add settings system prompt
-	if settings != nil && settings.SystemPrompt != "" {
-		parts = append(parts, "\n# Custom Instructions\n"+settings.SystemPrompt)
-	}
-
-	// Add extra system prompt from CLI flag
-	if extra != "" {
-		parts = append(parts, "\n# Additional Instructions\n"+extra)
-	}
-
-	// Load memory index if available
-	memDir := config.MemoryDir()
-	if memIndex, err := config.LoadMemoryIndex(memDir); err == nil && memIndex != "" {
-		parts = append(parts, "\n# Memory\n"+memIndex)
-	}
-
-	return strings.Join(parts, "\n")
 }
