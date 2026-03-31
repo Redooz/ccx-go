@@ -1,4 +1,4 @@
-# claude-code-go -- Implementation Spec
+# ccx-go -- Implementation Spec
 
 ## Phase 1: Foundation (Week 1-3)
 

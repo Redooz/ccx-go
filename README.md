@@ -1,4 +1,4 @@
-# claude-code-go
+# ccx-go
 
 A Go implementation of an AI coding assistant CLI, inspired by Claude Code's architecture. Zero-dependency single binary with goroutine-based multi-agent orchestration.
 
@@ -73,14 +73,14 @@ pkg/
 ## Getting Started
 
 ```sh
-go install github.com/anton-abyzov/claude-code-go/cmd/claude@latest
+go install github.com/anton-abyzov/ccx-go/cmd/claude@latest
 ```
 
 ## Development
 
 ```sh
-git clone https://github.com/anton-abyzov/claude-code-go.git
-cd claude-code-go
+git clone https://github.com/anton-abyzov/ccx-go.git
+cd ccx-go
 go build ./cmd/claude
 go test ./...
 ```
