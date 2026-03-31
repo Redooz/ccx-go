@@ -1,0 +1,29 @@
+# Binaries
+claude
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Build
+/dist/
+/bin/
+
+# Test
+*.test
+coverage.out
+coverage.html
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go
+vendor/
+go.sum
