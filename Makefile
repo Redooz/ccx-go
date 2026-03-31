@@ -4,7 +4,7 @@ MODULE = github.com/anton-abyzov/ccx-go
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS = -ldflags "-s -w -X main.version=$(VERSION)"
 
-.PHONY: build test lint clean fmt vet
+.PHONY: build test lint clean fmt vet release snapshot
 
 build:
 	go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY) ./cmd/claude
@@ -29,3 +29,9 @@ clean:
 coverage:
 	go test ./... -coverprofile=coverage.out
 	go tool cover -html=coverage.out -o coverage.html
+
+release:
+	goreleaser release --clean
+
+snapshot:
+	goreleaser build --snapshot --clean
