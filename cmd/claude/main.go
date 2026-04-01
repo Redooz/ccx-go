@@ -47,7 +47,7 @@ func main() {
 	}
 
 	rootCmd.Flags().StringP("model", "m", "claude-sonnet-4-20250514", "model to use")
-	rootCmd.Flags().Int("max-turns", 0, "maximum conversation turns (0 = unlimited)")
+	rootCmd.Flags().Int("max-turns", 200, "maximum conversation turns")
 	rootCmd.Flags().Int("max-tokens", 16384, "maximum tokens per response")
 	rootCmd.Flags().Bool("no-stream", false, "disable streaming output")
 	rootCmd.Flags().StringP("system", "s", "", "additional system prompt")

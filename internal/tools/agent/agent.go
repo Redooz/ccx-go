@@ -91,7 +91,7 @@ func (t *Tool) runSubAgent(ctx context.Context, prompt string) (string, error) {
 		},
 	}
 
-	const maxTurns = 10
+	const maxTurns = 100
 	var collectedText strings.Builder
 
 	for turn := 0; turn < maxTurns; turn++ {
