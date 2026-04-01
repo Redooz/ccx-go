@@ -41,6 +41,13 @@ func (r *Registry) FindByName(name string) Tool {
 	return r.tools[name]
 }
 
+// Count returns the number of registered tools.
+func (r *Registry) Count() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.tools)
+}
+
 // All returns all registered tools.
 func (r *Registry) All() []Tool {
 	r.mu.RLock()

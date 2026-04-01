@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
@@ -48,6 +49,7 @@ func main() {
 	rootCmd.Flags().Int("max-tokens", 16384, "maximum tokens per response")
 	rootCmd.Flags().Bool("no-stream", false, "disable streaming output")
 	rootCmd.Flags().StringP("system", "s", "", "additional system prompt")
+	rootCmd.Flags().Bool("tui", false, "use full-screen Bubbletea TUI (default: inline)")
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -64,6 +66,7 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	maxTurns, _ := cmd.Flags().GetInt("max-turns")
 	maxTokens, _ := cmd.Flags().GetInt("max-tokens")
 	extraSystem, _ := cmd.Flags().GetString("system")
+	useTUI, _ := cmd.Flags().GetBool("tui")
 
 	// Load configuration
 	settings, _ := config.LoadSettings(config.DefaultSettingsPath())
@@ -126,13 +129,100 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	isTTY := term.IsTerminal(int(os.Stdin.Fd()))
 
 	if isTTY {
-		return runTUI(cmd.Context(), client, registry, cwd, model, maxTokens, maxTurns, systemPrompt, tracker, args)
+		if useTUI {
+			return runFullscreenTUI(cmd.Context(), client, registry, cwd, model, maxTokens, maxTurns, systemPrompt, tracker, args)
+		}
+		return runInline(cmd.Context(), client, registry, cwd, model, maxTokens, maxTurns, systemPrompt, tracker, args)
 	}
 
 	return runPipe(cmd.Context(), client, registry, model, maxTokens, maxTurns, systemPrompt, tracker, args)
 }
 
-func runTUI(parentCtx context.Context, client *api.Client, registry *tool.Registry, cwd, model string, maxTokens, maxTurns int, systemPrompt string, tracker *cost.Tracker, args []string) error {
+// runInline runs the Claude Code-style inline chat (default for TTY).
+func runInline(parentCtx context.Context, client *api.Client, registry *tool.Registry, cwd, model string, maxTokens, maxTurns int, systemPrompt string, tracker *cost.Tracker, args []string) error {
+	ctx, cancel := signal.NotifyContext(parentCtx, syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	// Print welcome panel
+	tui.RenderWelcomeInline(version, model, cwd, registry.Count())
+
+	streaming := false
+
+	loop := query.NewLoop(client, registry, query.LoopConfig{
+		Model:          model,
+		MaxTokens:      maxTokens,
+		MaxTurns:       maxTurns,
+		System:         systemPrompt,
+		SuppressOutput: true,
+		OnText: func(text string) {
+			if !streaming {
+				streaming = true
+			}
+			tui.RenderStreamChunk(text)
+		},
+		OnToolStart: func(name string) {
+			if streaming {
+				tui.RenderStreamEnd()
+				streaming = false
+			}
+			tui.RenderToolStartInline(name, "")
+		},
+		OnToolDone: func(name, result string, isErr bool) {
+			tui.RenderToolOutputInline(result, isErr)
+		},
+		OnTurnComplete: func(usage api.Usage) {
+			tracker.Record(model, usage.InputTokens, usage.OutputTokens)
+		},
+	})
+
+	// Handle initial prompt from args
+	if len(args) > 0 {
+		input := strings.Join(args, " ")
+		tui.RenderUserMessageInline(input)
+		streaming = false
+		if err := loop.SendMessage(ctx, input); err != nil {
+			tui.RenderErrorInline(err)
+		}
+		if streaming {
+			tui.RenderStreamEnd()
+			streaming = false
+		}
+		tui.RenderSeparator()
+	}
+
+	scanner := bufio.NewScanner(os.Stdin)
+	for {
+		tui.RenderPromptInline()
+		if !scanner.Scan() {
+			break
+		}
+		input := strings.TrimSpace(scanner.Text())
+		if input == "" {
+			continue
+		}
+		if input == "/exit" || input == "/quit" {
+			break
+		}
+
+		tui.RenderUserMessageInline(input)
+		streaming = false
+
+		if err := loop.SendMessage(ctx, input); err != nil {
+			tui.RenderErrorInline(err)
+		}
+		if streaming {
+			tui.RenderStreamEnd()
+			streaming = false
+		}
+		tui.RenderSeparator()
+	}
+
+	fmt.Fprintf(os.Stderr, "\n--- session: %s ---\n", tracker.Summary())
+	return nil
+}
+
+// runFullscreenTUI runs the original Bubbletea full-screen mode (--tui flag).
+func runFullscreenTUI(parentCtx context.Context, client *api.Client, registry *tool.Registry, cwd, model string, maxTokens, maxTurns int, systemPrompt string, tracker *cost.Tracker, args []string) error {
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
 
