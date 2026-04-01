@@ -24,7 +24,8 @@ var SlashCommands = []struct {
 }
 
 // NewReadline creates a liner instance with tab completion and history.
-func NewReadline() *liner.State {
+// extraCompletions are additional /-prefixed strings (e.g. discovered skill names).
+func NewReadline(extraCompletions []string) *liner.State {
 	line := liner.NewLiner()
 	line.SetCtrlCAborts(true)
 
@@ -36,6 +37,11 @@ func NewReadline() *liner.State {
 		for _, cmd := range SlashCommands {
 			if strings.HasPrefix(cmd.Name, line) {
 				completions = append(completions, cmd.Name)
+			}
+		}
+		for _, c := range extraCompletions {
+			if strings.HasPrefix(c, line) {
+				completions = append(completions, c)
 			}
 		}
 		return completions

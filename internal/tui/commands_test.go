@@ -116,6 +116,5 @@ func TestHandleSlashCommand_ToolsNilRegistry(t *testing.T) {
 
 func TestHandleSlashCommand_Unknown(t *testing.T) {
 	result := HandleSlashCommand("/foo", newTestCommandCtx())
-	assert.NotNil(t, result)
-	assert.Contains(t, result.Output, "Unknown command: /foo")
+	assert.Nil(t, result) // unknown commands return nil (may be skills)
 }

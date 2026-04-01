@@ -15,6 +15,7 @@ import (
 	"github.com/anton-abyzov/ccx-go/internal/cost"
 	"github.com/anton-abyzov/ccx-go/internal/prompt"
 	"github.com/anton-abyzov/ccx-go/internal/query"
+	"github.com/anton-abyzov/ccx-go/internal/skill"
 	"github.com/anton-abyzov/ccx-go/internal/tui"
 	agentTool "github.com/anton-abyzov/ccx-go/internal/tools/agent"
 	"github.com/anton-abyzov/ccx-go/internal/tools/bash"
@@ -228,7 +229,14 @@ func runInline(parentCtx context.Context, client *api.Client, registry *tool.Reg
 		sendAndRender(strings.Join(args, " "))
 	}
 
-	line := tui.NewReadline()
+	// Discover skills for tab completion and invocation
+	discoveredSkills := skill.DiscoverAll()
+	var skillCompletions []string
+	for _, s := range discoveredSkills {
+		skillCompletions = append(skillCompletions, "/"+s.Name)
+	}
+
+	line := tui.NewReadline(skillCompletions)
 	defer line.Close()
 	defer tui.SaveHistory(line)
 
@@ -259,6 +267,27 @@ func runInline(parentCtx context.Context, client *api.Client, registry *tool.Reg
 				fmt.Println()
 				continue
 			}
+
+			// Try skill invocation
+			parts := strings.SplitN(input, " ", 2)
+			skillName := strings.TrimPrefix(parts[0], "/")
+			skillArgs := ""
+			if len(parts) > 1 {
+				skillArgs = parts[1]
+			}
+			if s := skill.FindSkillByName(discoveredSkills, skillName); s != nil {
+				skillPrompt := fmt.Sprintf("<skill name=%q>\n%s\n</skill>", s.Name, s.Body)
+				if skillArgs != "" {
+					skillPrompt += fmt.Sprintf("\n\nUser request: %s", skillArgs)
+				}
+				sendAndRender(skillPrompt)
+				continue
+			}
+
+			// Unknown command
+			tui.RenderCommandOutputInline(fmt.Sprintf("Unknown command: %s\nType / for available commands.", parts[0]))
+			fmt.Println()
+			continue
 		}
 
 		sendAndRender(input)
@@ -366,6 +395,21 @@ func runPipe(parentCtx context.Context, client *api.Client, registry *tool.Regis
 				fmt.Println(result.Output)
 			}
 			return nil
+		}
+
+		// Try skill invocation
+		discoveredSkills := skill.DiscoverAll()
+		parts := strings.SplitN(prompt, " ", 2)
+		skillName := strings.TrimPrefix(parts[0], "/")
+		skillArgs := ""
+		if len(parts) > 1 {
+			skillArgs = parts[1]
+		}
+		if s := skill.FindSkillByName(discoveredSkills, skillName); s != nil {
+			prompt = fmt.Sprintf("<skill name=%q>\n%s\n</skill>", s.Name, s.Body)
+			if skillArgs != "" {
+				prompt += fmt.Sprintf("\n\nUser request: %s", skillArgs)
+			}
 		}
 	}
 

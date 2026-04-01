@@ -52,7 +52,7 @@ func HandleSlashCommand(input string, ctx CommandContext) *CommandResult {
 	case "/tools":
 		return &CommandResult{Output: toolsOutput(ctx.Registry)}
 	default:
-		return &CommandResult{Output: fmt.Sprintf("Unknown command: %s\nType / for available commands.", parts[0])}
+		return nil // not a built-in command; may be a skill
 	}
 }
 
