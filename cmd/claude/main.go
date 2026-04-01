@@ -25,6 +25,13 @@ import (
 	"github.com/anton-abyzov/ccx-go/internal/tools/glob"
 	"github.com/anton-abyzov/ccx-go/internal/tools/grep"
 	"github.com/anton-abyzov/ccx-go/internal/tools/notebookedit"
+	"github.com/anton-abyzov/ccx-go/internal/tools/planmode"
+	"github.com/anton-abyzov/ccx-go/internal/tools/sendmessage"
+	"github.com/anton-abyzov/ccx-go/internal/tools/taskcreate"
+	"github.com/anton-abyzov/ccx-go/internal/tools/tasklist"
+	"github.com/anton-abyzov/ccx-go/internal/tools/taskupdate"
+	"github.com/anton-abyzov/ccx-go/internal/tools/teamcreate"
+	"github.com/anton-abyzov/ccx-go/internal/tools/teamdelete"
 	"github.com/anton-abyzov/ccx-go/internal/tools/todowrite"
 	"github.com/anton-abyzov/ccx-go/internal/tools/webfetch"
 	"github.com/anton-abyzov/ccx-go/internal/tools/websearch"
@@ -490,6 +497,14 @@ func registerTools(cwd string, client api.MessageClient, model string) *tool.Reg
 		todowrite.New(),
 		notebookedit.New(),
 		agentTool.New(client, registry, model, agentSystem),
+		teamcreate.New(),
+		teamdelete.New(),
+		sendmessage.New(),
+		taskcreate.New(),
+		taskupdate.New(),
+		tasklist.New(),
+		planmode.NewEnter(),
+		planmode.NewExit(),
 	}
 
 	for _, t := range tools {
