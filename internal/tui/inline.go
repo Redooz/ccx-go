@@ -67,7 +67,7 @@ func termWidth() int {
 }
 
 // RenderWelcomeInline prints the welcome panel inline (not full-screen).
-func RenderWelcomeInline(version, model, cwd string, toolCount int) {
+func RenderWelcomeInline(version, model, cwd, authDisplay string, toolCount int) {
 	w := termWidth()
 	if w > 100 {
 		w = 100
@@ -99,7 +99,7 @@ func RenderWelcomeInline(version, model, cwd string, toolCount int) {
 		leftLines = append(leftLines, line)
 	}
 	leftLines = append(leftLines, "")
-	leftLines = append(leftLines, welcomeGreenStyle.Render(modelShort)+" · API Key")
+	leftLines = append(leftLines, welcomeGreenStyle.Render(modelShort)+" · "+authDisplay)
 	leftLines = append(leftLines, welcomeDim.Render(shortCwd))
 	leftLines = append(leftLines, welcomeDim.Render(fmt.Sprintf("%d tools available", toolCount)))
 

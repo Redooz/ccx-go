@@ -25,6 +25,7 @@ type Client struct {
 	apiKey     string
 	baseURL    string
 	version    string
+	useOAuth   bool
 	httpClient *http.Client
 }
 
@@ -36,6 +37,13 @@ func NewClient(apiKey string) *Client {
 		version:    defaultVersion,
 		httpClient: &http.Client{Timeout: 300 * time.Second},
 	}
+}
+
+// WithOAuth configures the client to use OAuth Bearer authentication
+// instead of the x-api-key header.
+func (c *Client) WithOAuth(enabled bool) *Client {
+	c.useOAuth = enabled
+	return c
 }
 
 // WithBaseURL sets a custom base URL (useful for testing).
@@ -162,7 +170,12 @@ func (c *Client) CreateMessageStream(ctx context.Context, req *Request) (*Stream
 
 func (c *Client) setHeaders(req *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Key", c.apiKey)
+	if c.useOAuth {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+		req.Header.Set("anthropic-beta", "oauth-2025-04-20")
+	} else {
+		req.Header.Set("X-API-Key", c.apiKey)
+	}
 	req.Header.Set("Anthropic-Version", c.version)
 }
 

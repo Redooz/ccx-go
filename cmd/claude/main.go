@@ -59,9 +59,10 @@ func main() {
 }
 
 func runQuery(cmd *cobra.Command, args []string) error {
-	apiKey := os.Getenv("ANTHROPIC_API_KEY")
-	if apiKey == "" {
-		return fmt.Errorf("ANTHROPIC_API_KEY environment variable is required\n\nSet it with:\n  export ANTHROPIC_API_KEY=sk-ant-...")
+	// Resolve authentication: env var → macOS Keychain → credentials file
+	auth, err := config.ResolveAuth()
+	if err != nil {
+		return fmt.Errorf("%w", err)
 	}
 
 	model, _ := cmd.Flags().GetString("model")
@@ -90,7 +91,10 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	tracker := cost.NewTracker()
 
 	// Set up client and tools
-	client := api.NewClient(apiKey)
+	client := api.NewClient(auth.Key)
+	if auth.IsOAuth {
+		client.WithOAuth(true)
+	}
 	registry := registerTools(cwd, client, model)
 
 	// Build CLAUDE.md content for system prompt
@@ -134,19 +138,19 @@ func runQuery(cmd *cobra.Command, args []string) error {
 		if useTUI {
 			return runFullscreenTUI(cmd.Context(), client, registry, cwd, model, maxTokens, maxTurns, systemPrompt, tracker, args)
 		}
-		return runInline(cmd.Context(), client, registry, cwd, model, maxTokens, maxTurns, systemPrompt, tracker, args)
+		return runInline(cmd.Context(), client, registry, cwd, model, auth.Display, maxTokens, maxTurns, systemPrompt, tracker, args)
 	}
 
 	return runPipe(cmd.Context(), client, registry, model, maxTokens, maxTurns, systemPrompt, tracker, args)
 }
 
 // runInline runs the Claude Code-style inline chat (default for TTY).
-func runInline(parentCtx context.Context, client *api.Client, registry *tool.Registry, cwd, model string, maxTokens, maxTurns int, systemPrompt string, tracker *cost.Tracker, args []string) error {
+func runInline(parentCtx context.Context, client *api.Client, registry *tool.Registry, cwd, model, authDisplay string, maxTokens, maxTurns int, systemPrompt string, tracker *cost.Tracker, args []string) error {
 	ctx, cancel := signal.NotifyContext(parentCtx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	// Print welcome panel + footer
-	tui.RenderWelcomeInline(version, model, cwd, registry.Count())
+	tui.RenderWelcomeInline(version, model, cwd, authDisplay, registry.Count())
 	tui.RenderFooterInline(model)
 
 	// Streaming state managed via closures

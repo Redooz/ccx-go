@@ -227,6 +227,25 @@ func TestClient_SetHeaders(t *testing.T) {
 	})
 }
 
+func TestClient_SetHeaders_OAuth(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		assert.Equal(t, "Bearer oauth-token", r.Header.Get("Authorization"))
+		assert.Equal(t, "oauth-2025-04-20", r.Header.Get("anthropic-beta"))
+		assert.Empty(t, r.Header.Get("X-API-Key"))
+		assert.Equal(t, defaultVersion, r.Header.Get("Anthropic-Version"))
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(Response{})
+	}))
+	defer server.Close()
+
+	client := NewClient("oauth-token").WithBaseURL(server.URL).WithOAuth(true)
+	client.CreateMessage(context.Background(), &Request{
+		Model:    "claude-sonnet-4-20250514",
+		Messages: []Message{{Role: RoleUser, Content: []ContentBlock{NewTextBlock("test")}}},
+	})
+}
+
 func TestAPIError(t *testing.T) {
 	err := &APIError{StatusCode: 429, Type: "rate_limit_error", Message: "too many requests"}
 	assert.Contains(t, err.Error(), "429")
