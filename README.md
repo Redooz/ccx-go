@@ -2,17 +2,14 @@
 
 A Go implementation of an AI coding assistant CLI, inspired by Claude Code's architecture. Zero-dependency single binary with goroutine-based multi-agent orchestration.
 
-## Backstory
+## Why CCX?
 
-On March 31, 2026, security researcher Chaofan Shou ([@Fried_rice](https://x.com/Fried_rice/status/2038894956459290963)) discovered that Anthropic's npm package `@anthropic-ai/claude-code` shipped with a 57MB source map file (`cli.js.map`) that exposed the full, unobfuscated TypeScript source -- 512,000 lines across 1,900+ files.
+CCX is a family of clean-room AI coding assistant implementations, built as open-source alternatives to proprietary tools. Each implementation is designed from the ground up using publicly documented API specifications and common patterns in AI-assisted development.
 
-The architecture analysis revealed a sophisticated system: 43 built-in tools, 4-layer context compression, multi-agent orchestration, MCP protocol integration, a permission DSL, and hidden features like BUDDY AI pet, KAIROS daemon mode, and Auto-Dream memory consolidation. The full breakdown is available at [verified-skill.com/insights/claude-code](https://verified-skill.com/insights/claude-code).
-
-Rather than just archiving the leak, the community began building clean-room implementations in multiple languages. Go was a natural first choice -- the language has a proven track record of rewriting developer tools into fast, single-binary alternatives (gh, lazygit, k9s, fzf). ccx-go follows that tradition: a full working implementation with real tool execution, TUI, and agent system -- not just a metadata wrapper.
+Go was a natural first choice -- the language has a proven track record of rewriting developer tools into fast, single-binary alternatives (gh, lazygit, k9s, fzf). ccx-go follows that tradition: a full working implementation with real tool execution, TUI, and agent system -- not just a metadata wrapper.
 
 For comparison, [instructkr/claw-code](https://github.com/instructkr/claw-code) (41.7k stars) took a Python metadata/harness approach. CCX takes a different path with full language-native implementations and real test suites.
 
-- Original tweet: https://x.com/Fried_rice/status/2038894956459290963
 - Architecture analysis: https://verified-skill.com/insights/claude-code
 - CCX umbrella: https://github.com/anton-abyzov/ccx
 
@@ -26,7 +23,7 @@ For comparison, [instructkr/claw-code](https://github.com/instructkr/claw-code) 
 
 ## Architecture
 
-Based on analysis of Claude Code's 512K-line TypeScript architecture:
+Inspired by architecture analysis of Claude Code:
 
 - **Tool System**: Pluggable tools with permission gating and concurrent execution
 - **Agent Spawning**: Goroutine-per-agent with context cancellation and channel-based communication
