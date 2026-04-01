@@ -37,9 +37,13 @@ func LoadSkill(path string) (*Skill, error) {
 
 	skill.FilePath = path
 	if skill.Name == "" {
-		// Default name from filename
 		base := filepath.Base(path)
-		skill.Name = strings.TrimSuffix(base, filepath.Ext(base))
+		name := strings.TrimSuffix(base, filepath.Ext(base))
+		if strings.EqualFold(name, "SKILL") {
+			// For SKILL.md, derive name from parent directory
+			name = filepath.Base(filepath.Dir(path))
+		}
+		skill.Name = name
 	}
 
 	return skill, nil

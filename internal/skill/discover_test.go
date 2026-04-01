@@ -44,6 +44,20 @@ func TestScanSkillDir_SubdirSKILLmd(t *testing.T) {
 	assert.Equal(t, "sw:increment", skills[0].Name)
 }
 
+func TestScanSkillDir_SubdirSKILLmd_NoNameInFrontmatter(t *testing.T) {
+	dir := t.TempDir()
+
+	// SKILL.md without name: field — name should come from directory
+	subdir := filepath.Join(dir, "skill-creator")
+	require.NoError(t, os.MkdirAll(subdir, 0755))
+	os.WriteFile(filepath.Join(subdir, "SKILL.md"), []byte("---\ndescription: Create skills\n---\nCreator body"), 0644)
+
+	skills := scanSkillDir(dir)
+	assert.Len(t, skills, 1)
+	assert.Equal(t, "skill-creator", skills[0].Name)
+	assert.Equal(t, "Create skills", skills[0].Description)
+}
+
 func TestScanSkillDir_NotExists(t *testing.T) {
 	skills := scanSkillDir("/nonexistent/path")
 	assert.Nil(t, skills)
@@ -80,4 +94,18 @@ func TestScanSpecweavePlugins_WithSkills(t *testing.T) {
 	skills := scanSpecweavePlugins(home)
 	assert.Len(t, skills, 1)
 	assert.Equal(t, "sw:pm", skills[0].Name)
+}
+
+func TestScanSpecweavePlugins_NoNameInFrontmatter(t *testing.T) {
+	home := t.TempDir()
+
+	// SKILL.md without name: — should derive sw:team-lead from path
+	skillDir := filepath.Join(home, ".nvm", "versions", "node", "v22", "lib", "node_modules", "specweave", "plugins", "core", "skills", "team-lead")
+	require.NoError(t, os.MkdirAll(skillDir, 0755))
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\ndescription: Orchestrate teams\n---\nTeam lead body"), 0644)
+
+	skills := scanSpecweavePlugins(home)
+	assert.Len(t, skills, 1)
+	assert.Equal(t, "sw:team-lead", skills[0].Name)
+	assert.Equal(t, "Orchestrate teams", skills[0].Description)
 }

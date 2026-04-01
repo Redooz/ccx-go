@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // DiscoverAll scans known skill directories and returns all discovered skills.
@@ -106,6 +107,9 @@ func scanSpecweavePlugins(home string) []*Skill {
 				}
 				p := filepath.Join(skillsDir, se.Name(), "SKILL.md")
 				if s, err := LoadSkill(p); err == nil {
+					if !strings.HasPrefix(s.Name, "sw:") {
+						s.Name = "sw:" + s.Name
+					}
 					skills = append(skills, s)
 				}
 			}
