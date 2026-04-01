@@ -228,16 +228,20 @@ func runInline(parentCtx context.Context, client *api.Client, registry *tool.Reg
 		sendAndRender(strings.Join(args, " "))
 	}
 
-	scanner := bufio.NewScanner(os.Stdin)
+	line := tui.NewReadline()
+	defer line.Close()
+	defer tui.SaveHistory(line)
+
 	for {
-		tui.RenderPromptInline()
-		if !scanner.Scan() {
-			break
+		input, err := line.Prompt("❯ ")
+		if err != nil {
+			break // Ctrl+C or Ctrl+D
 		}
-		input := strings.TrimSpace(scanner.Text())
+		input = strings.TrimSpace(input)
 		if input == "" {
 			continue
 		}
+		line.AppendHistory(input)
 
 		// Handle slash commands
 		if strings.HasPrefix(input, "/") {
