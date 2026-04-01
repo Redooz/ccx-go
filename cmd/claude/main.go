@@ -54,6 +54,8 @@ func main() {
 	rootCmd.Flags().Bool("tui", false, "use full-screen Bubbletea TUI (default: inline)")
 	rootCmd.Flags().Bool("dangerously-skip-permissions", true, "skip all permission prompts (default)")
 	rootCmd.Flags().String("permission-mode", "bypass", "permission mode: default, acceptEdits, bypass, plan")
+	rootCmd.Flags().String("provider", "anthropic", "API provider: anthropic, openrouter")
+	rootCmd.Flags().String("openrouter-key", "", "OpenRouter API key (env: OPENROUTER_API_KEY)")
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -61,17 +63,13 @@ func main() {
 }
 
 func runQuery(cmd *cobra.Command, args []string) error {
-	// Resolve authentication: env var → macOS Keychain → credentials file
-	auth, err := config.ResolveAuth()
-	if err != nil {
-		return fmt.Errorf("%w", err)
-	}
-
+	provider, _ := cmd.Flags().GetString("provider")
 	model, _ := cmd.Flags().GetString("model")
 	maxTurns, _ := cmd.Flags().GetInt("max-turns")
 	maxTokens, _ := cmd.Flags().GetInt("max-tokens")
 	extraSystem, _ := cmd.Flags().GetString("system")
 	useTUI, _ := cmd.Flags().GetBool("tui")
+	openrouterKey, _ := cmd.Flags().GetString("openrouter-key")
 
 	// Load configuration
 	settings, _ := config.LoadSettings(config.DefaultSettingsPath())
@@ -92,11 +90,39 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	// Initialize cost tracker
 	tracker := cost.NewTracker()
 
-	// Set up client and tools
-	client := api.NewClient(auth.Key)
-	if auth.IsOAuth {
-		client.WithOAuth(true)
+	// Set up client based on provider
+	var client api.MessageClient
+	var authDisplay string
+
+	switch provider {
+	case "openrouter":
+		if openrouterKey == "" {
+			openrouterKey = os.Getenv("OPENROUTER_API_KEY")
+		}
+		if openrouterKey == "" {
+			return fmt.Errorf("OpenRouter requires --openrouter-key or OPENROUTER_API_KEY env var")
+		}
+		client = api.NewOpenAIClient(openrouterKey)
+		authDisplay = "OpenRouter"
+		if !cmd.Flags().Changed("model") {
+			model = "nvidia/nemotron-3-super-120b-a12b:free"
+		}
+	default:
+		auth, err := config.ResolveAuth()
+		if err != nil {
+			return fmt.Errorf("%w", err)
+		}
+		anthropicClient := api.NewClient(auth.Key)
+		if auth.IsOAuth {
+			anthropicClient.WithOAuth(true)
+		}
+		client = anthropicClient
+		authDisplay = auth.Display
+		if auth.Email != "" {
+			authDisplay = auth.Display + " (" + auth.Email + ")"
+		}
 	}
+
 	registry := registerTools(cwd, client, model)
 
 	// Build CLAUDE.md content for system prompt
@@ -140,14 +166,14 @@ func runQuery(cmd *cobra.Command, args []string) error {
 		if useTUI {
 			return runFullscreenTUI(cmd.Context(), client, registry, cwd, model, maxTokens, maxTurns, systemPrompt, tracker, args)
 		}
-		return runInline(cmd.Context(), client, registry, cwd, model, auth.Display, maxTokens, maxTurns, systemPrompt, tracker, args)
+		return runInline(cmd.Context(), client, registry, cwd, model, authDisplay, maxTokens, maxTurns, systemPrompt, tracker, args)
 	}
 
 	return runPipe(cmd.Context(), client, registry, model, maxTokens, maxTurns, systemPrompt, tracker, args)
 }
 
 // runInline runs the Claude Code-style inline chat (default for TTY).
-func runInline(parentCtx context.Context, client *api.Client, registry *tool.Registry, cwd, model, authDisplay string, maxTokens, maxTurns int, systemPrompt string, tracker *cost.Tracker, args []string) error {
+func runInline(parentCtx context.Context, client api.MessageClient, registry *tool.Registry, cwd, model, authDisplay string, maxTokens, maxTurns int, systemPrompt string, tracker *cost.Tracker, args []string) error {
 	ctx, cancel := signal.NotifyContext(parentCtx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
@@ -312,7 +338,7 @@ func runInline(parentCtx context.Context, client *api.Client, registry *tool.Reg
 }
 
 // runFullscreenTUI runs the original Bubbletea full-screen mode (--tui flag).
-func runFullscreenTUI(parentCtx context.Context, client *api.Client, registry *tool.Registry, cwd, model string, maxTokens, maxTurns int, systemPrompt string, tracker *cost.Tracker, args []string) error {
+func runFullscreenTUI(parentCtx context.Context, client api.MessageClient, registry *tool.Registry, cwd, model string, maxTokens, maxTurns int, systemPrompt string, tracker *cost.Tracker, args []string) error {
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
 
@@ -378,7 +404,7 @@ func runFullscreenTUI(parentCtx context.Context, client *api.Client, registry *t
 	return err
 }
 
-func runPipe(parentCtx context.Context, client *api.Client, registry *tool.Registry, model string, maxTokens, maxTurns int, systemPrompt string, tracker *cost.Tracker, args []string) error {
+func runPipe(parentCtx context.Context, client api.MessageClient, registry *tool.Registry, model string, maxTokens, maxTurns int, systemPrompt string, tracker *cost.Tracker, args []string) error {
 	prompt := ""
 	if len(args) > 0 {
 		prompt = strings.Join(args, " ")
@@ -447,7 +473,7 @@ func runPipe(parentCtx context.Context, client *api.Client, registry *tool.Regis
 	return err
 }
 
-func registerTools(cwd string, client *api.Client, model string) *tool.Registry {
+func registerTools(cwd string, client api.MessageClient, model string) *tool.Registry {
 	registry := tool.NewRegistry()
 
 	agentSystem := "You are a sub-agent. Complete the given task using available tools, then return a concise summary."
