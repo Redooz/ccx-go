@@ -30,6 +30,11 @@ type StreamTextMsg struct {
 	Text string
 }
 
+// StreamThinkingMsg delivers an incremental thinking/reasoning chunk.
+type StreamThinkingMsg struct {
+	Text string
+}
+
 // ToolExecMsg signals that a tool is being executed.
 type ToolExecMsg struct {
 	ToolName string

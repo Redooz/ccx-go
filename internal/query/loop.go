@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/anton-abyzov/ccx-go/internal/api"
 	"github.com/anton-abyzov/ccx-go/internal/tool"
+	"golang.org/x/sync/errgroup"
 )
 
 // LoopConfig configures the query loop behavior.
@@ -21,6 +23,8 @@ type LoopConfig struct {
 	System    string
 	// OnText is called when text is received during streaming (for TUI integration).
 	OnText func(text string)
+	// OnThinking is called when thinking/reasoning text is received during streaming.
+	OnThinking func(text string)
 	// OnToolStart is called when a tool execution begins.
 	OnToolStart func(toolName string)
 	// OnToolDone is called when a tool execution completes.
@@ -197,14 +201,25 @@ func (l *Loop) sendRequest(ctx context.Context, messages []api.Message) (*api.Re
 			return nil, fmt.Errorf("reading stream: %w", err)
 		}
 
+		// Print thinking deltas as they arrive
+		if event.Type == "content_block_delta" && event.Delta != nil && event.Delta.Type == "thinking_delta" {
+			if l.config.OnThinking != nil {
+				l.config.OnThinking(event.Delta.Thinking)
+			}
+		}
+
 		// Print text deltas as they arrive
 		if event.Type == "content_block_delta" && event.Delta != nil && event.Delta.Type == "text_delta" {
 			text := event.Delta.Text
-			if !l.config.SuppressOutput {
-				fmt.Fprint(os.Stdout, text)
-			}
-			if l.config.OnText != nil {
-				l.config.OnText(text)
+			// Extract <think>...</think> tags and route to OnThinking
+			text = l.extractThinkTags(text)
+			if text != "" {
+				if !l.config.SuppressOutput {
+					fmt.Fprint(os.Stdout, text)
+				}
+				if l.config.OnText != nil {
+					l.config.OnText(text)
+				}
 			}
 		}
 
@@ -221,42 +236,64 @@ func (l *Loop) sendRequest(ctx context.Context, messages []api.Message) (*api.Re
 }
 
 func (l *Loop) executeTools(ctx context.Context, toolUses []api.ContentBlock) []api.ContentBlock {
-	var results []api.ContentBlock
+	results := make([]api.ContentBlock, len(toolUses))
+	var g errgroup.Group
 
-	for _, tu := range toolUses {
-		if l.config.OnToolStart != nil {
-			l.config.OnToolStart(tu.Name)
-		}
-
-		t := l.registry.FindByName(tu.Name)
-		if t == nil {
-			errMsg := fmt.Sprintf("tool %q not found", tu.Name)
-			results = append(results, api.NewToolResultBlock(tu.ID, errMsg, true))
-			if l.config.OnToolDone != nil {
-				l.config.OnToolDone(tu.Name, errMsg, true)
+	for i, tu := range toolUses {
+		i, tu := i, tu // capture loop variables
+		g.Go(func() error {
+			if l.config.OnToolStart != nil {
+				l.config.OnToolStart(tu.Name)
 			}
-			continue
-		}
 
-		result, err := t.Execute(ctx, tu.Input)
-		if err != nil {
-			errMsg := fmt.Sprintf("tool execution error: %v", err)
-			results = append(results, api.NewToolResultBlock(tu.ID, errMsg, true))
-			if l.config.OnToolDone != nil {
-				l.config.OnToolDone(tu.Name, errMsg, true)
+			t := l.registry.FindByName(tu.Name)
+			if t == nil {
+				errMsg := fmt.Sprintf("tool %q not found", tu.Name)
+				results[i] = api.NewToolResultBlock(tu.ID, errMsg, true)
+				if l.config.OnToolDone != nil {
+					l.config.OnToolDone(tu.Name, errMsg, true)
+				}
+				return nil
 			}
-			continue
-		}
 
-		results = append(results, api.NewToolResultBlock(
-			tu.ID, result.Content, result.IsError,
-		))
-		if l.config.OnToolDone != nil {
-			l.config.OnToolDone(tu.Name, result.Content, result.IsError)
-		}
+			result, err := t.Execute(ctx, tu.Input)
+			if err != nil {
+				errMsg := fmt.Sprintf("tool execution error: %v", err)
+				results[i] = api.NewToolResultBlock(tu.ID, errMsg, true)
+				if l.config.OnToolDone != nil {
+					l.config.OnToolDone(tu.Name, errMsg, true)
+				}
+				return nil
+			}
+
+			results[i] = api.NewToolResultBlock(tu.ID, result.Content, result.IsError)
+			if l.config.OnToolDone != nil {
+				l.config.OnToolDone(tu.Name, result.Content, result.IsError)
+			}
+			return nil
+		})
 	}
+	g.Wait()
 
 	return results
+}
+
+// thinkTagRe matches <think>...</think> blocks in text content.
+var thinkTagRe = regexp.MustCompile(`(?s)<think>(.*?)</think>`)
+
+// extractThinkTags removes <think>...</think> from text, sending the content
+// to OnThinking, and returns the remaining text.
+func (l *Loop) extractThinkTags(text string) string {
+	if l.config.OnThinking == nil {
+		// Strip think tags even when no callback, so they don't leak to output
+		return thinkTagRe.ReplaceAllString(text, "")
+	}
+
+	matches := thinkTagRe.FindAllStringSubmatch(text, -1)
+	for _, m := range matches {
+		l.config.OnThinking(m[1])
+	}
+	return thinkTagRe.ReplaceAllString(text, "")
 }
 
 func extractToolUses(blocks []api.ContentBlock) []api.ContentBlock {

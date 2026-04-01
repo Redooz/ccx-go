@@ -209,6 +209,13 @@ func runInline(parentCtx context.Context, client api.MessageClient, registry *to
 			}
 			streamBuf.WriteString(text)
 		},
+		OnThinking: func(text string) {
+			if working {
+				tui.RenderWorkingClearInline()
+				working = false
+			}
+			tui.RenderThinkingInline(text)
+		},
 		OnToolStart: func(name string) {
 			if working {
 				tui.RenderWorkingClearInline()
@@ -232,6 +239,7 @@ func runInline(parentCtx context.Context, client api.MessageClient, registry *to
 	cmdCtx := tui.CommandContext{
 		Version:  version,
 		Model:    model,
+		CWD:      cwd,
 		Tracker:  tracker,
 		Registry: registry,
 	}
@@ -360,6 +368,9 @@ func runFullscreenTUI(parentCtx context.Context, client api.MessageClient, regis
 		OnText: func(text string) {
 			msgCh <- tui.StreamTextMsg{Text: text}
 		},
+		OnThinking: func(text string) {
+			msgCh <- tui.StreamThinkingMsg{Text: text}
+		},
 		OnToolStart: func(name string) {
 			msgCh <- tui.ToolExecMsg{ToolName: name}
 		},
@@ -430,9 +441,11 @@ func runPipe(parentCtx context.Context, client api.MessageClient, registry *tool
 
 	// Handle slash commands without hitting the API
 	if strings.HasPrefix(prompt, "/") {
+		cwd, _ := os.Getwd()
 		cmdCtx := tui.CommandContext{
 			Version:  version,
 			Model:    model,
+			CWD:      cwd,
 			Tracker:  tracker,
 			Registry: registry,
 		}

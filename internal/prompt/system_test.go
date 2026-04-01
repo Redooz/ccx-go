@@ -29,8 +29,8 @@ func TestBuildSystemPrompt_Basic(t *testing.T) {
 
 	assert.Contains(t, result, "AI coding assistant CLI")
 	assert.Contains(t, result, "/home/user/project")
-	assert.Contains(t, result, "**Bash**: Run commands")
-	assert.Contains(t, result, "**Read**: Read files")
+	assert.Contains(t, result, "## Bash\nRun commands")
+	assert.Contains(t, result, "## Read\nRead files")
 }
 
 func TestBuildSystemPrompt_WithClaudeMD(t *testing.T) {
@@ -59,7 +59,7 @@ func TestBuildSystemPrompt_AllParts(t *testing.T) {
 
 	assert.Contains(t, result, "AI coding assistant")
 	assert.Contains(t, result, "/workspace")
-	assert.Contains(t, result, "**Grep**: Search")
+	assert.Contains(t, result, "## Grep\nSearch")
 	assert.Contains(t, result, "Do X")
 	assert.Contains(t, result, "Think step by step")
 }

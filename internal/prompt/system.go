@@ -1,6 +1,8 @@
 package prompt
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"runtime"
 	"strings"
@@ -30,12 +32,19 @@ func BuildSystemPrompt(tools []tool.Tool, claudeMd string, cwd string, extra str
 - Platform: %s/%s
 - Runtime: %s`, cwd, runtime.GOOS, runtime.GOARCH, runtime.Version()))
 
-	// Available tools
+	// Available tools with full schemas
 	if len(tools) > 0 {
 		var toolList strings.Builder
 		toolList.WriteString("\n# Available Tools\n")
 		for _, t := range tools {
-			toolList.WriteString(fmt.Sprintf("- **%s**: %s\n", t.Name(), t.Description()))
+			toolList.WriteString(fmt.Sprintf("\n## %s\n%s\n", t.Name(), t.Description()))
+			schema := t.InputSchema()
+			if len(schema) > 0 {
+				var pretty bytes.Buffer
+				if err := json.Indent(&pretty, schema, "", "  "); err == nil {
+					toolList.WriteString(fmt.Sprintf("\nInput Schema:\n```json\n%s\n```\n", pretty.String()))
+				}
+			}
 		}
 		parts = append(parts, toolList.String())
 	}

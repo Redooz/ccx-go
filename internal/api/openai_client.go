@@ -117,10 +117,11 @@ type oaiRequest struct {
 }
 
 type oaiMessage struct {
-	Role       string        `json:"role"`
-	Content    string        `json:"content,omitempty"`
-	ToolCalls  []oaiToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string        `json:"tool_call_id,omitempty"`
+	Role             string        `json:"role"`
+	Content          string        `json:"content,omitempty"`
+	ReasoningContent string        `json:"reasoning_content,omitempty"`
+	ToolCalls        []oaiToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string        `json:"tool_call_id,omitempty"`
 }
 
 type oaiToolCall struct {
@@ -175,9 +176,10 @@ type oaiStreamChoice struct {
 }
 
 type oaiStreamDelta struct {
-	Role      string               `json:"role,omitempty"`
-	Content   string               `json:"content,omitempty"`
-	ToolCalls []oaiStreamToolCall  `json:"tool_calls,omitempty"`
+	Role             string               `json:"role,omitempty"`
+	Content          string               `json:"content,omitempty"`
+	ReasoningContent string               `json:"reasoning_content,omitempty"`
+	ToolCalls        []oaiStreamToolCall  `json:"tool_calls,omitempty"`
 }
 
 type oaiStreamToolCall struct {
@@ -315,6 +317,10 @@ func convertFromOpenAI(oai *oaiResponse) *Response {
 			resp.StopReason = "end_turn"
 		}
 
+		if choice.Message.ReasoningContent != "" {
+			resp.Content = append(resp.Content, NewThinkingBlock(choice.Message.ReasoningContent))
+		}
+
 		if choice.Message.Content != "" {
 			resp.Content = append(resp.Content, NewTextBlock(choice.Message.Content))
 		}
@@ -332,14 +338,15 @@ func convertFromOpenAI(oai *oaiResponse) *Response {
 // --- Stream adapter: translates OpenAI SSE → Anthropic StreamEvents ---
 
 type openAIStreamAdapter struct {
-	reader      io.ReadCloser
-	scanner     *bufio.Scanner
-	model       string
-	pending     []*StreamEvent
-	started     bool
-	textStarted bool
-	blockIdx    int
-	activeTools map[int]int // openai tool index → our block index
+	reader          io.ReadCloser
+	scanner         *bufio.Scanner
+	model           string
+	pending         []*StreamEvent
+	started         bool
+	thinkingStarted bool
+	textStarted     bool
+	blockIdx        int
+	activeTools     map[int]int // openai tool index → our block index
 }
 
 func newOpenAIStreamAdapter(r io.ReadCloser, model string) *openAIStreamAdapter {
@@ -438,8 +445,33 @@ func (a *openAIStreamAdapter) processChunk(chunk *oaiStreamChunk) {
 	choice := chunk.Choices[0]
 	delta := choice.Delta
 
+	// Reasoning content (DeepSeek R1, etc. via OpenRouter)
+	if delta.ReasoningContent != "" {
+		if !a.thinkingStarted {
+			a.thinkingStarted = true
+			a.pending = append(a.pending, &StreamEvent{
+				Type:         "content_block_start",
+				Index:        a.blockIdx,
+				ContentBlock: &ContentBlock{Type: "thinking"},
+			})
+		}
+		a.pending = append(a.pending, &StreamEvent{
+			Type:  "content_block_delta",
+			Index: a.blockIdx,
+			Delta: &Delta{Type: "thinking_delta", Thinking: delta.ReasoningContent},
+		})
+	}
+
 	// Text content
 	if delta.Content != "" {
+		// Close thinking block if it was open
+		if a.thinkingStarted && !a.textStarted {
+			a.pending = append(a.pending, &StreamEvent{
+				Type: "content_block_stop", Index: a.blockIdx,
+			})
+			a.blockIdx++
+			a.thinkingStarted = false
+		}
 		if !a.textStarted {
 			a.textStarted = true
 			a.pending = append(a.pending, &StreamEvent{
@@ -493,6 +525,13 @@ func (a *openAIStreamAdapter) processChunk(chunk *oaiStreamChunk) {
 
 	// Finish reason
 	if choice.FinishReason != nil && *choice.FinishReason != "" {
+		if a.thinkingStarted {
+			a.pending = append(a.pending, &StreamEvent{
+				Type: "content_block_stop", Index: a.blockIdx,
+			})
+			a.blockIdx++
+			a.thinkingStarted = false
+		}
 		if a.textStarted {
 			a.pending = append(a.pending, &StreamEvent{
 				Type: "content_block_stop", Index: a.blockIdx,

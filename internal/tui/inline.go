@@ -213,6 +213,12 @@ func RenderSeparator() {
 	fmt.Println()
 }
 
+// RenderThinkingInline prints thinking/reasoning text in dim italic.
+func RenderThinkingInline(text string) {
+	// Dim + Italic ANSI codes
+	fmt.Print("\033[2;3m" + text + "\033[0m")
+}
+
 // RenderStreamChunk prints a streaming text chunk without newline (for progressive rendering).
 func RenderStreamChunk(text string) {
 	fmt.Print(text)
