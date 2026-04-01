@@ -20,19 +20,18 @@ func RenderMessage(msg ChatMessage, width int) string {
 
 	switch msg.Role {
 	case "user":
-		b.WriteString(userStyle.Render("> " + msg.Content))
-		b.WriteString("\n")
+		b.WriteString(userStyle.Render("❯ " + msg.Content))
+		b.WriteString("\n\n")
 
 	case "assistant":
 		rendered := renderMarkdown(msg.Content, width)
 		b.WriteString(rendered)
 
 	case "tool":
-		header := toolNameStyle.Render(fmt.Sprintf("  [%s]", msg.ToolID))
+		header := toolNameStyle.Render(fmt.Sprintf("⚙ %s", msg.ToolID))
 		b.WriteString(header)
 		b.WriteString("\n")
 		if msg.Content != "" {
-			// Truncate long tool output
 			content := msg.Content
 			if len(content) > 2000 {
 				content = content[:2000] + "\n... (truncated)"
@@ -40,10 +39,11 @@ func RenderMessage(msg ChatMessage, width int) string {
 			b.WriteString(toolOutputStyle.Render(content))
 			b.WriteString("\n")
 		}
+		b.WriteString("\n")
 
 	case "error":
-		b.WriteString(errorStyle.Render("Error: " + msg.Content))
-		b.WriteString("\n")
+		b.WriteString(errorStyle.Render("✗ " + msg.Content))
+		b.WriteString("\n\n")
 	}
 
 	return b.String()

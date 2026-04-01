@@ -1,65 +1,65 @@
 package tui
 
 import (
-	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// InputModel wraps a textarea for user input.
+// InputModel wraps a textinput for user input with ❯ prompt.
 type InputModel struct {
-	textarea textarea.Model
-	focused  bool
+	ti textinput.Model
 }
 
 // NewInputModel creates a new input model.
 func NewInputModel() InputModel {
-	ta := textarea.New()
-	ta.Placeholder = "Type a message..."
-	ta.ShowLineNumbers = false
-	ta.SetHeight(3)
-	ta.Focus()
+	ti := textinput.New()
+	ti.Prompt = "❯ "
+	ti.PromptStyle = promptStyle
+	ti.Placeholder = ""
+	ti.CharLimit = 0
+	ti.Focus()
 
-	return InputModel{
-		textarea: ta,
-		focused:  true,
-	}
+	return InputModel{ti: ti}
 }
 
 // Update handles input events.
 func (m InputModel) Update(msg tea.Msg) (InputModel, tea.Cmd) {
 	var cmd tea.Cmd
-	m.textarea, cmd = m.textarea.Update(msg)
+	m.ti, cmd = m.ti.Update(msg)
 	return m, cmd
 }
 
 // View renders the input area.
 func (m InputModel) View() string {
-	return inputBorderStyle.Render(m.textarea.View())
+	return m.ti.View()
 }
 
 // Value returns the current input text.
 func (m InputModel) Value() string {
-	return m.textarea.Value()
+	return m.ti.Value()
 }
 
 // Reset clears the input.
 func (m *InputModel) Reset() {
-	m.textarea.Reset()
+	m.ti.Reset()
 }
 
-// SetWidth sets the textarea width.
+// SetValue sets the input text (useful for testing).
+func (m *InputModel) SetValue(s string) {
+	m.ti.SetValue(s)
+}
+
+// SetWidth sets the textinput width.
 func (m *InputModel) SetWidth(w int) {
-	m.textarea.SetWidth(w - 4) // account for border padding
+	m.ti.Width = w - 4
 }
 
-// Focus sets focus on the textarea.
+// Focus sets focus on the textinput.
 func (m *InputModel) Focus() tea.Cmd {
-	m.focused = true
-	return m.textarea.Focus()
+	return m.ti.Focus()
 }
 
-// Blur removes focus from the textarea.
+// Blur removes focus from the textinput.
 func (m *InputModel) Blur() {
-	m.focused = false
-	m.textarea.Blur()
+	m.ti.Blur()
 }

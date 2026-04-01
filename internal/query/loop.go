@@ -27,6 +27,8 @@ type LoopConfig struct {
 	OnToolDone func(toolName string, result string, isError bool)
 	// OnTurnComplete is called after each assistant turn.
 	OnTurnComplete func(usage api.Usage)
+	// SuppressOutput disables direct stdout printing (for TUI mode).
+	SuppressOutput bool
 }
 
 // Loop implements the core agentic query loop.
@@ -142,7 +144,9 @@ func (l *Loop) runLoop(ctx context.Context) error {
 		}
 
 		toolUses := extractToolUses(resp.Content)
-		printTextBlocks(os.Stdout, resp.Content)
+		if !l.config.SuppressOutput {
+			printTextBlocks(os.Stdout, resp.Content)
+		}
 
 		// Stop conditions:
 		// 1. No tool calls → conversation turn complete
@@ -196,7 +200,9 @@ func (l *Loop) sendRequest(ctx context.Context, messages []api.Message) (*api.Re
 		// Print text deltas as they arrive
 		if event.Type == "content_block_delta" && event.Delta != nil && event.Delta.Type == "text_delta" {
 			text := event.Delta.Text
-			fmt.Fprint(os.Stdout, text)
+			if !l.config.SuppressOutput {
+				fmt.Fprint(os.Stdout, text)
+			}
 			if l.config.OnText != nil {
 				l.config.OnText(text)
 			}

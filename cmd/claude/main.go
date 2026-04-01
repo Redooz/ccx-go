@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
@@ -12,7 +13,7 @@ import (
 	"github.com/anton-abyzov/ccx-go/internal/cost"
 	"github.com/anton-abyzov/ccx-go/internal/prompt"
 	"github.com/anton-abyzov/ccx-go/internal/query"
-	"github.com/anton-abyzov/ccx-go/internal/tool"
+	"github.com/anton-abyzov/ccx-go/internal/tui"
 	agentTool "github.com/anton-abyzov/ccx-go/internal/tools/agent"
 	"github.com/anton-abyzov/ccx-go/internal/tools/bash"
 	"github.com/anton-abyzov/ccx-go/internal/tools/fileedit"
@@ -24,6 +25,8 @@ import (
 	"github.com/anton-abyzov/ccx-go/internal/tools/todowrite"
 	"github.com/anton-abyzov/ccx-go/internal/tools/webfetch"
 	"github.com/anton-abyzov/ccx-go/internal/tools/websearch"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/anton-abyzov/ccx-go/internal/tool"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -121,17 +124,81 @@ func runQuery(cmd *cobra.Command, args []string) error {
 
 	// Detect interactive TTY vs piped input
 	isTTY := term.IsTerminal(int(os.Stdin.Fd()))
-	toolCount := len(registry.All())
 
-	// Print welcome
 	if isTTY {
-		fmt.Fprintf(os.Stderr, "ccx-go v%s | Model: %s | Tools: %d\n", version, model, toolCount)
-		if len(claudeMD.Entries) > 0 {
-			fmt.Fprintf(os.Stderr, "Loaded %d CLAUDE.md file(s)\n", len(claudeMD.Entries))
-		}
-		fmt.Fprintf(os.Stderr, "Type /exit to quit, Ctrl+C to interrupt\n\n")
+		return runTUI(cmd.Context(), client, registry, cwd, model, maxTokens, maxTurns, systemPrompt, tracker, args)
 	}
 
+	return runPipe(cmd.Context(), client, registry, model, maxTokens, maxTurns, systemPrompt, tracker, args)
+}
+
+func runTUI(parentCtx context.Context, client *api.Client, registry *tool.Registry, cwd, model string, maxTokens, maxTurns int, systemPrompt string, tracker *cost.Tracker, args []string) error {
+	ctx, cancel := context.WithCancel(parentCtx)
+	defer cancel()
+
+	msgCh := make(chan tea.Msg, 100)
+
+	loop := query.NewLoop(client, registry, query.LoopConfig{
+		Model:          model,
+		MaxTokens:      maxTokens,
+		MaxTurns:       maxTurns,
+		System:         systemPrompt,
+		SuppressOutput: true,
+		OnText: func(text string) {
+			msgCh <- tui.StreamTextMsg{Text: text}
+		},
+		OnToolStart: func(name string) {
+			msgCh <- tui.ToolExecMsg{ToolName: name}
+		},
+		OnToolDone: func(name, result string, isErr bool) {
+			msgCh <- tui.ToolDoneMsg{ToolName: name, Content: result, IsError: isErr}
+		},
+		OnTurnComplete: func(usage api.Usage) {
+			tracker.Record(model, usage.InputTokens, usage.OutputTokens)
+		},
+	})
+
+	onSubmit := func(text string) {
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					msgCh <- tui.ErrorMsg{Err: fmt.Errorf("panic: %v", r)}
+					return
+				}
+			}()
+
+			err := loop.SendMessage(ctx, text)
+			if err != nil {
+				msgCh <- tui.ErrorMsg{Err: err}
+				return
+			}
+			msgCh <- tui.DoneMsg{}
+		}()
+	}
+
+	// Build initial prompt from args
+	initialPrompt := ""
+	if len(args) > 0 {
+		initialPrompt = strings.Join(args, " ")
+	}
+
+	m := tui.New(tui.AppConfig{
+		ModelName:     model,
+		Version:       version,
+		CWD:           cwd,
+		InitialPrompt: initialPrompt,
+	}, msgCh, onSubmit)
+
+	p := tea.NewProgram(m, tea.WithAltScreen())
+	_, err := p.Run()
+
+	// Print session summary after TUI exits
+	fmt.Fprintf(os.Stderr, "\n--- session: %s ---\n", tracker.Summary())
+
+	return err
+}
+
+func runPipe(parentCtx context.Context, client *api.Client, registry *tool.Registry, model string, maxTokens, maxTurns int, systemPrompt string, tracker *cost.Tracker, args []string) error {
 	loop := query.NewLoop(client, registry, query.LoopConfig{
 		Model:     model,
 		MaxTokens: maxTokens,
@@ -142,20 +209,16 @@ func runQuery(cmd *cobra.Command, args []string) error {
 		},
 	})
 
-	// Build prompt from args
 	prompt := ""
 	if len(args) > 0 {
 		prompt = strings.Join(args, " ")
 	}
 
-	// Handle Ctrl+C gracefully
-	ctx := cmd.Context()
-	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	ctx, cancel := signal.NotifyContext(parentCtx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	err := loop.Run(ctx, prompt)
 
-	// Print session summary
 	fmt.Fprintf(os.Stderr, "\n--- session: %s ---\n", tracker.Summary())
 
 	return err
@@ -164,7 +227,6 @@ func runQuery(cmd *cobra.Command, args []string) error {
 func registerTools(cwd string, client *api.Client, model string) *tool.Registry {
 	registry := tool.NewRegistry()
 
-	// Build a temporary system prompt for the agent tool (it will use the same prompt)
 	agentSystem := "You are a sub-agent. Complete the given task using available tools, then return a concise summary."
 
 	tools := []tool.Tool{

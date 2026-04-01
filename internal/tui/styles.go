@@ -3,58 +3,80 @@ package tui
 import "github.com/charmbracelet/lipgloss"
 
 var (
-	// Colors
-	accent    = lipgloss.Color("#7C3AED")
-	dimColor  = lipgloss.Color("#666666")
-	errColor  = lipgloss.Color("#EF4444")
-	okColor   = lipgloss.Color("#22C55E")
-	warnColor = lipgloss.Color("#F59E0B")
+	// Claude Code color palette
+	orange  = lipgloss.Color("204")
+	cyan    = lipgloss.Color("86")
+	dimGray = lipgloss.Color("242")
+	green   = lipgloss.Color("78")
+	yellow  = lipgloss.Color("220")
+	red     = lipgloss.Color("196")
 
-	// Message styles
+	// Prompt ❯
+	promptStyle = lipgloss.NewStyle().
+			Foreground(orange).
+			Bold(true)
+
+	// User messages
 	userStyle = lipgloss.NewStyle().
-			Foreground(accent).
+			Foreground(cyan).
 			Bold(true)
 
-	assistantStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#E5E5E5"))
-
+	// Error
 	errorStyle = lipgloss.NewStyle().
-			Foreground(errColor).
+			Foreground(red).
 			Bold(true)
-
-	// Status bar
-	statusBarStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("#1E1E2E")).
-			Foreground(dimColor).
-			Padding(0, 1)
 
 	// Tool display
 	toolNameStyle = lipgloss.NewStyle().
-			Foreground(warnColor).
+			Foreground(yellow).
 			Bold(true)
 
 	toolOutputStyle = lipgloss.NewStyle().
-			Foreground(dimColor).
+			Foreground(dimGray).
 			PaddingLeft(2)
-
-	// Input area
-	inputBorderStyle = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(accent).
-				Padding(0, 1)
 
 	// Spinner
 	spinnerStyle = lipgloss.NewStyle().
-			Foreground(accent)
+			Foreground(orange)
 
-	// Permission prompt
+	// Status bar (footer)
+	statusLeftStyle = lipgloss.NewStyle().
+			Foreground(dimGray)
+
+	statusRightStyle = lipgloss.NewStyle().
+				Foreground(dimGray)
+
+	// Header line
+	headerStyle = lipgloss.NewStyle().
+			Foreground(orange)
+
+	// Separator
+	separatorStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("238"))
+
+	// Welcome panel
+	welcomeBorderStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(orange)
+
+	welcomeTitleStyle = lipgloss.NewStyle().
+				Foreground(orange).
+				Bold(true)
+
+	welcomeDimStyle = lipgloss.NewStyle().
+			Foreground(dimGray)
+
+	welcomeModelStyle = lipgloss.NewStyle().
+				Foreground(green)
+
+	// Permission prompt (kept for future use)
 	permissionStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(warnColor).
+			BorderForeground(yellow).
 			Padding(0, 1).
 			MarginTop(1)
 
 	permissionTitleStyle = lipgloss.NewStyle().
-				Foreground(warnColor).
+				Foreground(yellow).
 				Bold(true)
 )
