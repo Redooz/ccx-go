@@ -40,7 +40,7 @@ func renderWelcome(width, height int, modelName, cwd string) string {
 		"",
 		asciiPet,
 		"",
-		welcomeModelStyle.Render(modelShort),
+		welcomeModelStyle.Render(modelShort) + " · API Key",
 		welcomeDimStyle.Render(shortCwd),
 	}, "\n")
 	leftPanel := lipgloss.Place(leftW, contentH, lipgloss.Center, lipgloss.Center, leftContent)

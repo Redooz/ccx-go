@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/anton-abyzov/ccx-go/internal/api"
+	"github.com/anton-abyzov/ccx-go/internal/compact"
 	"github.com/anton-abyzov/ccx-go/internal/config"
 	"github.com/anton-abyzov/ccx-go/internal/cost"
 	"github.com/anton-abyzov/ccx-go/internal/prompt"
@@ -143,10 +144,14 @@ func runInline(parentCtx context.Context, client *api.Client, registry *tool.Reg
 	ctx, cancel := signal.NotifyContext(parentCtx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	// Print welcome panel
+	// Print welcome panel + footer
 	tui.RenderWelcomeInline(version, model, cwd, registry.Count())
+	tui.RenderFooterInline(model)
 
+	// Streaming state managed via closures
 	streaming := false
+	working := false
+	var streamBuf strings.Builder
 
 	loop := query.NewLoop(client, registry, query.LoopConfig{
 		Model:          model,
@@ -155,14 +160,23 @@ func runInline(parentCtx context.Context, client *api.Client, registry *tool.Reg
 		System:         systemPrompt,
 		SuppressOutput: true,
 		OnText: func(text string) {
+			if working {
+				tui.RenderWorkingClearInline()
+				working = false
+			}
 			if !streaming {
 				streaming = true
 			}
-			tui.RenderStreamChunk(text)
+			streamBuf.WriteString(text)
 		},
 		OnToolStart: func(name string) {
+			if working {
+				tui.RenderWorkingClearInline()
+				working = false
+			}
 			if streaming {
-				tui.RenderStreamEnd()
+				tui.RenderMarkdownInline(streamBuf.String())
+				streamBuf.Reset()
 				streaming = false
 			}
 			tui.RenderToolStartInline(name, "")
@@ -175,19 +189,43 @@ func runInline(parentCtx context.Context, client *api.Client, registry *tool.Reg
 		},
 	})
 
-	// Handle initial prompt from args
-	if len(args) > 0 {
-		input := strings.Join(args, " ")
+	cmdCtx := tui.CommandContext{
+		Version:  version,
+		Model:    model,
+		Tracker:  tracker,
+		Registry: registry,
+	}
+
+	// sendAndRender handles showing working indicator, calling the API, and rendering the result.
+	sendAndRender := func(input string) {
 		tui.RenderUserMessageInline(input)
 		streaming = false
+		working = true
+		streamBuf.Reset()
+		tui.RenderWorkingInline()
+
 		if err := loop.SendMessage(ctx, input); err != nil {
+			if working {
+				tui.RenderWorkingClearInline()
+				working = false
+			}
 			tui.RenderErrorInline(err)
 		}
+		if working {
+			tui.RenderWorkingClearInline()
+			working = false
+		}
 		if streaming {
-			tui.RenderStreamEnd()
+			tui.RenderMarkdownInline(streamBuf.String())
+			streamBuf.Reset()
 			streaming = false
 		}
 		tui.RenderSeparator()
+	}
+
+	// Handle initial prompt from args
+	if len(args) > 0 {
+		sendAndRender(strings.Join(args, " "))
 	}
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -200,21 +238,26 @@ func runInline(parentCtx context.Context, client *api.Client, registry *tool.Reg
 		if input == "" {
 			continue
 		}
-		if input == "/exit" || input == "/quit" {
-			break
+
+		// Handle slash commands
+		if strings.HasPrefix(input, "/") {
+			result := tui.HandleSlashCommand(input, cmdCtx)
+			if result != nil {
+				if result.Quit {
+					break
+				}
+				if result.Compact {
+					loop.Messages = compact.MicroCompact(loop.Messages, 4)
+				}
+				if result.Output != "" {
+					tui.RenderCommandOutputInline(result.Output)
+				}
+				fmt.Println()
+				continue
+			}
 		}
 
-		tui.RenderUserMessageInline(input)
-		streaming = false
-
-		if err := loop.SendMessage(ctx, input); err != nil {
-			tui.RenderErrorInline(err)
-		}
-		if streaming {
-			tui.RenderStreamEnd()
-			streaming = false
-		}
-		tui.RenderSeparator()
+		sendAndRender(input)
 	}
 
 	fmt.Fprintf(os.Stderr, "\n--- session: %s ---\n", tracker.Summary())
@@ -289,6 +332,39 @@ func runFullscreenTUI(parentCtx context.Context, client *api.Client, registry *t
 }
 
 func runPipe(parentCtx context.Context, client *api.Client, registry *tool.Registry, model string, maxTokens, maxTurns int, systemPrompt string, tracker *cost.Tracker, args []string) error {
+	prompt := ""
+	if len(args) > 0 {
+		prompt = strings.Join(args, " ")
+	}
+
+	// For piped single-line input, read it early so we can check for slash commands
+	if prompt == "" {
+		scanner := bufio.NewScanner(os.Stdin)
+		if scanner.Scan() {
+			prompt = strings.TrimSpace(scanner.Text())
+		}
+		if prompt == "" {
+			return nil
+		}
+	}
+
+	// Handle slash commands without hitting the API
+	if strings.HasPrefix(prompt, "/") {
+		cmdCtx := tui.CommandContext{
+			Version:  version,
+			Model:    model,
+			Tracker:  tracker,
+			Registry: registry,
+		}
+		result := tui.HandleSlashCommand(prompt, cmdCtx)
+		if result != nil {
+			if result.Output != "" {
+				fmt.Println(result.Output)
+			}
+			return nil
+		}
+	}
+
 	loop := query.NewLoop(client, registry, query.LoopConfig{
 		Model:     model,
 		MaxTokens: maxTokens,
@@ -299,15 +375,10 @@ func runPipe(parentCtx context.Context, client *api.Client, registry *tool.Regis
 		},
 	})
 
-	prompt := ""
-	if len(args) > 0 {
-		prompt = strings.Join(args, " ")
-	}
-
 	ctx, cancel := signal.NotifyContext(parentCtx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	err := loop.Run(ctx, prompt)
+	err := loop.SendMessage(ctx, prompt)
 
 	fmt.Fprintf(os.Stderr, "\n--- session: %s ---\n", tracker.Summary())
 

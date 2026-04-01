@@ -175,7 +175,8 @@ func RenderToolStartInline(name, detail string) {
 	fmt.Printf("  %s %s\n", dot, nm)
 }
 
-// RenderToolOutputInline prints tool output with dim styling and tree connector.
+// RenderToolOutputInline prints tool output with dim styling and collapsible display.
+// Outputs longer than 5 lines show first 3 lines + a "[+N more lines]" summary.
 func RenderToolOutputInline(output string, isError bool) {
 	if output == "" {
 		return
@@ -187,13 +188,16 @@ func RenderToolOutputInline(output string, isError bool) {
 	}
 
 	lines := strings.Split(output, "\n")
-	maxLines := 15
-	if len(lines) > maxLines {
-		lines = lines[:maxLines]
-		lines = append(lines, "  ... (truncated)")
-	}
-	for _, line := range lines {
-		fmt.Printf("  %s\n", style.Render("└ "+line))
+	if len(lines) > 5 {
+		hidden := len(lines) - 3
+		for _, line := range lines[:3] {
+			fmt.Printf("  %s\n", style.Render("└ "+line))
+		}
+		fmt.Printf("  %s\n", toolDimStyle.Render(fmt.Sprintf("  [+%d more lines]", hidden)))
+	} else {
+		for _, line := range lines {
+			fmt.Printf("  %s\n", style.Render("└ "+line))
+		}
 	}
 }
 
@@ -221,6 +225,48 @@ func RenderStreamEnd() {
 // RenderErrorInline prints an error message.
 func RenderErrorInline(err error) {
 	fmt.Printf("  %s %s\n", errorInlineStyle.Render("✗"), errorInlineStyle.Render(err.Error()))
+}
+
+// RenderWorkingInline prints the "● Working..." indicator on the current line (no newline).
+func RenderWorkingInline() {
+	fmt.Printf("  %s Working...", toolDotStyle.Render("●"))
+}
+
+// RenderWorkingClearInline clears the working indicator using \r + ANSI clear-to-end.
+func RenderWorkingClearInline() {
+	fmt.Print("\r\033[K")
+}
+
+// RenderMarkdownInline renders text with glamour markdown formatting and prints it.
+func RenderMarkdownInline(text string) {
+	if text == "" {
+		return
+	}
+	w := termWidth()
+	rendered := renderMarkdown(text, w)
+	fmt.Print(rendered)
+}
+
+// RenderFooterInline prints the footer bar: "? for shortcuts" (left) + "● model" (right).
+func RenderFooterInline(model string) {
+	w := termWidth()
+	if w > 100 {
+		w = 100
+	}
+	left := welcomeDim.Render("? for shortcuts")
+	modelShort := shortModelName(model)
+	right := welcomeDim.Render(fmt.Sprintf("● %s", modelShort))
+	gap := w - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 0 {
+		gap = 0
+	}
+	fmt.Println(left + strings.Repeat(" ", gap) + right)
+	fmt.Println()
+}
+
+// RenderCommandOutputInline prints slash command output with dim styling.
+func RenderCommandOutputInline(output string) {
+	fmt.Println(welcomeDim.Render(output))
 }
 
 // padRight pads a string with spaces to reach the target visible width.
