@@ -52,6 +52,8 @@ func main() {
 	rootCmd.Flags().Bool("no-stream", false, "disable streaming output")
 	rootCmd.Flags().StringP("system", "s", "", "additional system prompt")
 	rootCmd.Flags().Bool("tui", false, "use full-screen Bubbletea TUI (default: inline)")
+	rootCmd.Flags().Bool("dangerously-skip-permissions", true, "skip all permission prompts (default)")
+	rootCmd.Flags().String("permission-mode", "bypass", "permission mode: default, acceptEdits, bypass, plan")
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -202,14 +204,17 @@ func runInline(parentCtx context.Context, client *api.Client, registry *tool.Reg
 	}
 
 	// sendAndRender handles showing working indicator, calling the API, and rendering the result.
-	sendAndRender := func(input string) {
-		tui.RenderUserMessageInline(input)
+	// apiInput is sent to the model; displayText is shown to the user (if non-empty).
+	sendAndRender := func(apiInput, displayText string) {
+		if displayText != "" {
+			tui.RenderUserMessageInline(displayText)
+		}
 		streaming = false
 		working = true
 		streamBuf.Reset()
 		tui.RenderWorkingInline()
 
-		if err := loop.SendMessage(ctx, input); err != nil {
+		if err := loop.SendMessage(ctx, apiInput); err != nil {
 			if working {
 				tui.RenderWorkingClearInline()
 				working = false
@@ -230,7 +235,8 @@ func runInline(parentCtx context.Context, client *api.Client, registry *tool.Reg
 
 	// Handle initial prompt from args
 	if len(args) > 0 {
-		sendAndRender(strings.Join(args, " "))
+		initialPrompt := strings.Join(args, " ")
+		sendAndRender(initialPrompt, initialPrompt)
 	}
 
 	// Discover skills for tab completion and invocation
@@ -249,6 +255,8 @@ func runInline(parentCtx context.Context, client *api.Client, registry *tool.Reg
 		if err != nil {
 			break // Ctrl+C or Ctrl+D
 		}
+		// Clear liner's plain-text echo so only the styled version shows
+		fmt.Print("\033[A\033[2K\r")
 		input = strings.TrimSpace(input)
 		if input == "" {
 			continue
@@ -259,6 +267,7 @@ func runInline(parentCtx context.Context, client *api.Client, registry *tool.Reg
 		if strings.HasPrefix(input, "/") {
 			result := tui.HandleSlashCommand(input, cmdCtx)
 			if result != nil {
+				tui.RenderUserMessageInline(input)
 				if result.Quit {
 					break
 				}
@@ -284,17 +293,18 @@ func runInline(parentCtx context.Context, client *api.Client, registry *tool.Reg
 				if skillArgs != "" {
 					skillPrompt += fmt.Sprintf("\n\nUser request: %s", skillArgs)
 				}
-				sendAndRender(skillPrompt)
+				sendAndRender(skillPrompt, input)
 				continue
 			}
 
 			// Unknown command
+			tui.RenderUserMessageInline(input)
 			tui.RenderCommandOutputInline(fmt.Sprintf("Unknown command: %s\nType / for available commands.", parts[0]))
 			fmt.Println()
 			continue
 		}
 
-		sendAndRender(input)
+		sendAndRender(input, input)
 	}
 
 	fmt.Fprintf(os.Stderr, "\n--- session: %s ---\n", tracker.Summary())
