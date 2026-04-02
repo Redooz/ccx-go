@@ -1,14 +1,14 @@
 # ccx-go
 
-AI coding assistant CLI in Go. 9.3MB binary, 11 tools, Claude Code-style TUI. Built on Bubbletea/Charm with goroutine-based multi-agent orchestration.
+AI coding assistant CLI in Go, part of the [CCX (Community Code Extended)](https://github.com/anton-abyzov/ccx) project. 9.3MB binary, 11 tools, full TUI. Built on Bubbletea/Charm with goroutine-based multi-agent orchestration.
 
 ## Why CCX?
 
-CCX is a family of clean-room AI coding assistant implementations, built as open-source alternatives to proprietary tools. Each implementation is designed from the ground up using publicly documented API specifications and common patterns in AI-assisted development.
+CCX (Community Code Extended) is a custom AI coding assistant built from the ground up using publicly documented API specifications and common patterns in AI-assisted development. Each implementation is its own application with independent architecture decisions and language-idiomatic designs.
 
 Go was a natural first choice -- the language has a proven track record of rewriting developer tools into fast, single-binary alternatives (gh, lazygit, k9s, fzf). ccx-go follows that tradition: a full working implementation with real tool execution, TUI, and agent system -- not just a metadata wrapper.
 
-Unlike [instructkr/claw-code](https://github.com/instructkr/claw-code) (41.7k stars), which wraps Claude Code in a Python harness, ccx-go is a ground-up Go implementation with real tool execution, goroutine-based agents, and a comprehensive test suite.
+Unlike [instructkr/claw-code](https://github.com/instructkr/claw-code) (41.7k stars), which catalogs tool inventories as structured data, ccx-go is a ground-up Go implementation with real tool execution, goroutine-based agents, and a comprehensive test suite.
 
 - Architecture analysis: https://verified-skill.com/insights/claude-code
 - CCX umbrella: https://github.com/anton-abyzov/ccx
@@ -58,7 +58,7 @@ export ANTHROPIC_API_KEY="your-key-here"
 
 ## Architecture
 
-Inspired by architecture analysis of Claude Code:
+Based on publicly documented patterns in AI coding assistant architecture:
 
 - **Tool System**: Pluggable tools with permission gating and concurrent execution
 - **Agent Spawning**: Goroutine-per-agent with context cancellation and channel-based communication
@@ -114,6 +114,12 @@ internal/
 pkg/
   types/           # Shared types
   schema/          # JSON schema utilities
+```
+
+## Getting Started
+
+```sh
+go install github.com/anton-abyzov/ccx-go/cmd/claude@latest
 ```
 
 ## Development
